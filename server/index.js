@@ -1,4 +1,5 @@
 const express = require('express');
+const cron = require('node-cron');
 const http = require('http');
 const { WebSocketServer } = require('ws');
 const cors = require('cors');
@@ -9,8 +10,9 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
-
-
+const { OAuth2Client } = require('google-auth-library');
+const googleClient = new OAuth2Client('791853418225-nnsmvmfnabhqlevkevbp8549mccha2he.apps.googleusercontent.com');
+const axios = require('axios');
 const app = express();
 const server = http.createServer(app);
 const PORT = process.env.PORT || 5000;
@@ -19,6 +21,13 @@ const PORT = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
+app.use('/api', (req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.setHeader('Surrogate-Control', 'no-store');
+  next();
+});
 app.use((req, res, next) => {
   const start = Date.now();
   res.on('finish', () => {
@@ -54,7 +63,10 @@ const storage = new CloudinaryStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
+  limits: { 
+    fileSize: 10 * 1024 * 1024, // 10 MB for files
+    fieldSize: 10 * 1024 * 1024 // 10 MB for text fields (e.g. base64 images)
+  },
   fileFilter: (_req, file, cb) => {
     const allowed = ['.pdf', '.png', '.jpg', '.jpeg'];
     const ext = path.extname(file.originalname).toLowerCase();
@@ -239,6 +251,12 @@ const initMessagingTables = async () => {
   // Add corporate_account_id to appointments if not exists
   await pool.query(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS corporate_account_id INTEGER REFERENCES corporate_accounts(id)`);
   await pool.query(`ALTER TABLE appointments ADD COLUMN IF NOT EXISTS payment_method TEXT DEFAULT 'cash'`);
+
+  try {
+    await pool.query(`ALTER TABLE pickle_appointment ADD COLUMN IF NOT EXISTS open_play_type VARCHAR(50)`);
+  } catch(e) {
+    console.error('Error migrating pickle_appointment:', e);
+  }
 
   // Users table for Passenger/App authentication
   await pool.query(`
@@ -557,6 +575,7 @@ app.post('/api/appointments', async (req, res) => {
       corporateAccountNumber,
       proofOfPayment,
       isOpenPlay,
+      openPlayType,
       openPlayMaxPlayers,
       openPlayPrice,
       openPlayInstructions,
@@ -649,10 +668,10 @@ app.post('/api/appointments', async (req, res) => {
         pickup_location, destination_location,
         pickup_lat, pickup_lng, dest_lat, dest_lng,
         total_amount, corporate_account_id, payment_method, proof_of_payment,
-        is_open_play, open_play_max_players, open_play_price,
-        open_play_instructions, open_play_payment_details
+        is_open_play, open_play_type, open_play_max_players, open_play_price,
+        open_play_instructions, open_play_payment_details, status
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, 'confirmed')
       RETURNING *
     `;
 
@@ -678,6 +697,7 @@ app.post('/api/appointments', async (req, res) => {
       paymentMethod || 'cash',
       proofOfPayment || null,
       isOpenPlay === true,
+      openPlayType || 'DOUBLES',
       openPlayMaxPlayers ? parseInt(openPlayMaxPlayers) : 4,
       openPlayPrice ? parseFloat(openPlayPrice) : 0.00,
       openPlayInstructions || null,
@@ -5389,6 +5409,79 @@ app.post('/api/user/login', async (req, res) => {
   }
 });
 
+app.post('/api/auth/google', async (req, res) => {
+  try {
+    const { token, role } = req.body;
+    const userRole = role || 'user';
+    
+    const ticket = await googleClient.verifyIdToken({
+      idToken: token,
+      audience: '791853418225-nnsmvmfnabhqlevkevbp8549mccha2he.apps.googleusercontent.com'
+    });
+    const payload = ticket.getPayload();
+    const email = payload.email;
+    const name = payload.name;
+    
+    let { rows } = await pool.query(`SELECT * FROM users WHERE email = $1`, [email]);
+    
+    if (rows.length === 0) {
+      const dummyPassword = await bcrypt.hash(Math.random().toString(36).slice(-8), 10);
+      const insertRes = await pool.query(
+        `INSERT INTO users (full_name, email, phone_number, password, role)
+         VALUES ($1, $2, $3, $4, $5) RETURNING id, full_name, email, phone_number, role, gcash_number, paymaya_number, bank_account, bank_account_name`,
+        [name, email, '', dummyPassword, userRole]
+      );
+      rows = insertRes.rows;
+    }
+    
+    const user = { 
+      id: rows[0].id, full_name: rows[0].full_name, email: rows[0].email, 
+      phone_number: rows[0].phone_number, role: rows[0].role,
+      gcash_number: rows[0].gcash_number, paymaya_number: rows[0].paymaya_number,
+      bank_account: rows[0].bank_account, bank_account_name: rows[0].bank_account_name
+    };
+    res.json({ success: true, user });
+  } catch (err) {
+    console.error('Google auth error:', err);
+    res.status(500).json({ success: false, message: 'Google authentication failed' });
+  }
+});
+
+app.post('/api/auth/facebook', async (req, res) => {
+  try {
+    const { token, role } = req.body;
+    const userRole = role || 'user';
+    
+    const response = await axios.get(`https://graph.facebook.com/me?fields=id,name,email&access_token=${token}`);
+    const { name, email, id } = response.data;
+    
+    const userEmail = email || `${id}@facebook.com`;
+    
+    let { rows } = await pool.query(`SELECT * FROM users WHERE email = $1`, [userEmail]);
+    
+    if (rows.length === 0) {
+      const dummyPassword = await bcrypt.hash(Math.random().toString(36).slice(-8), 10);
+      const insertRes = await pool.query(
+        `INSERT INTO users (full_name, email, phone_number, password, role)
+         VALUES ($1, $2, $3, $4, $5) RETURNING id, full_name, email, phone_number, role, gcash_number, paymaya_number, bank_account, bank_account_name`,
+        [name, userEmail, '', dummyPassword, userRole]
+      );
+      rows = insertRes.rows;
+    }
+    
+    const user = { 
+      id: rows[0].id, full_name: rows[0].full_name, email: rows[0].email, 
+      phone_number: rows[0].phone_number, role: rows[0].role,
+      gcash_number: rows[0].gcash_number, paymaya_number: rows[0].paymaya_number,
+      bank_account: rows[0].bank_account, bank_account_name: rows[0].bank_account_name
+    };
+    res.json({ success: true, user });
+  } catch (err) {
+    console.error('Facebook auth error:', err);
+    res.status(500).json({ success: false, message: 'Facebook authentication failed' });
+  }
+});
+
 app.put('/api/user/profile/:id', async (req, res) => {
   try {
     const { id } = req.params;
@@ -5430,6 +5523,269 @@ app.get('/api/user/bookings/:email', async (req, res) => {
   }
 });
 
+// Helper to notify booking assistants of a newly opened slot
+const notifyBookingAssistants = async (courtName, date, time) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT * FROM pickle_booking_assistants 
+       WHERE is_active = TRUE
+       AND (expires_at IS NULL OR expires_at >= CURRENT_TIMESTAMP)
+       AND (preferred_date IS NULL OR preferred_date::date = $1::date)
+       AND (court_preference = 'Any' OR court_preference = $2)
+       AND ($3::time >= preferred_time_start AND $3::time < preferred_time_end)`
+      , [date, courtName, time]
+    );
+
+    for (const assistant of rows) {
+      const actionData = JSON.stringify([{ court: courtName, date: date, time: time }]);
+      const nowStr = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+      await pool.query(
+        `INSERT INTO pickle_notifications (user_email, sender_email, title, message, action_data)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [
+          assistant.user_email, 
+          'system@bookingassistant.com', 
+          'Quick Booking Alert!', 
+          `Good news! A slot opened up for ${courtName} on ${date} at ${time}. Book it now! (as of ${nowStr})`,
+          actionData
+        ]
+      );
+    }
+  } catch (error) {
+    console.error('Error notifying booking assistants:', error);
+  }
+};
+
+// Schedule a daily morning cron job at 6:00 AM to send booking summaries
+cron.schedule('0 6 * * *', async () => {
+  console.log('Running daily booking assistant summary...');
+  try {
+    const { rows: assistants } = await pool.query(
+      `SELECT * FROM pickle_booking_assistants WHERE is_active = TRUE AND (expires_at IS NULL OR expires_at >= CURRENT_TIMESTAMP)`
+    );
+
+    for (const assistant of assistants) {
+      const { user_email, preferred_date, preferred_time_start, preferred_time_end, court_preference } = assistant;
+      
+      const datesToCheck = [];
+      if (preferred_date) {
+        datesToCheck.push(new Date(preferred_date).toISOString().split('T')[0]);
+      } else {
+        for (let i = 0; i < 30; i++) {
+          const date = new Date();
+          date.setDate(date.getDate() + i);
+          datesToCheck.push(date.toISOString().split('T')[0]);
+        }
+      }
+
+      let courtsToCheck = [];
+      if (court_preference && court_preference !== 'Any') {
+        courtsToCheck.push(court_preference);
+      } else {
+        const { rows: courts } = await pool.query(`SELECT name FROM pickle_courts`);
+        courtsToCheck = courts.map(c => c.name);
+      }
+
+      let availableSlotsData = [];
+      for (const date of datesToCheck) {
+        for (const court of courtsToCheck) {
+          const { rows: appointments } = await pool.query(
+            `SELECT preferred_time FROM pickle_appointment 
+             WHERE service_type = $1 AND preferred_date::date = $2::date 
+             AND status NOT IN ('cancelled', 'completed')`,
+            [court, date]
+          );
+
+          const bookedTimes = appointments.map(a => a.preferred_time);
+          const startHour = parseInt(preferred_time_start.split(':')[0]);
+          const endHour = parseInt(preferred_time_end.split(':')[0]);
+
+          for (let hour = startHour; hour < endHour; hour++) {
+            const timeStr = `${hour.toString().padStart(2, '0')}:00`;
+            if (!bookedTimes.includes(timeStr) && !bookedTimes.includes(`${timeStr}:00`)) {
+              availableSlotsData.push({ date: date, court: court, time: timeStr, hour: hour });
+            }
+          }
+        }
+      }
+
+      if (availableSlotsData.length > 0) {
+        const availableSlots = availableSlotsData.map(s => `• ${new Date(s.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} at ${s.hour > 12 ? s.hour - 12 : s.hour}:00 ${s.hour >= 12 ? 'PM' : 'AM'} (${s.court})`);
+        const nowStr = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+        const summary = `Here are the available slots matching your preferences as of ${nowStr}:\n\n` + availableSlots.slice(0, 10).join('\n') + (availableSlots.length > 10 ? `\n...and ${availableSlots.length - 10} more.` : '');
+        
+        await pool.query(
+          `DELETE FROM pickle_notifications WHERE user_email = $1 AND title = 'Daily Booking Summary'`,
+          [user_email]
+        );
+        await pool.query(
+          `INSERT INTO pickle_notifications (user_email, sender_email, title, message, action_data)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [user_email, 'system@bookingassistant.com', 'Daily Booking Summary', summary, JSON.stringify(availableSlotsData.slice(0, 20))]
+        );
+      }
+    }
+  } catch (error) {
+    console.error('Error in daily booking summary cron job:', error);
+  }
+});
+
+// Endpoint to manually trigger the daily summary for testing purposes
+app.get('/api/test-summary', async (req, res) => {
+  console.log('Manually triggering daily booking assistant summary...');
+  try {
+    const { rows: assistants } = await pool.query(
+      `SELECT * FROM pickle_booking_assistants WHERE is_active = TRUE AND (expires_at IS NULL OR expires_at >= CURRENT_TIMESTAMP)`
+    );
+
+    for (const assistant of assistants) {
+      const { user_email, preferred_date, preferred_time_start, preferred_time_end, court_preference } = assistant;
+      
+      const datesToCheck = [];
+      if (preferred_date) {
+        datesToCheck.push(new Date(preferred_date).toISOString().split('T')[0]);
+      } else {
+        for (let i = 0; i < 30; i++) {
+          const date = new Date();
+          date.setDate(date.getDate() + i);
+          datesToCheck.push(date.toISOString().split('T')[0]);
+        }
+      }
+
+      let courtsToCheck = [];
+      if (court_preference && court_preference !== 'Any') {
+        courtsToCheck.push(court_preference);
+      } else {
+        const { rows: courts } = await pool.query(`SELECT name FROM pickle_courts`);
+        courtsToCheck = courts.map(c => c.name);
+      }
+
+      let availableSlotsData = [];
+      for (const date of datesToCheck) {
+        for (const court of courtsToCheck) {
+          const { rows: appointments } = await pool.query(
+            `SELECT preferred_time FROM pickle_appointment 
+             WHERE service_type = $1 AND preferred_date::date = $2::date 
+             AND status NOT IN ('cancelled', 'completed')`,
+            [court, date]
+          );
+
+          const bookedTimes = appointments.map(a => a.preferred_time);
+          const startHour = parseInt(preferred_time_start.split(':')[0]);
+          const endHour = parseInt(preferred_time_end.split(':')[0]);
+
+          for (let hour = startHour; hour < endHour; hour++) {
+            const timeStr = `${hour.toString().padStart(2, '0')}:00`;
+            if (!bookedTimes.includes(timeStr) && !bookedTimes.includes(`${timeStr}:00`)) {
+              availableSlotsData.push({ date: date, court: court, time: timeStr, hour: hour });
+            }
+          }
+        }
+      }
+
+      if (availableSlotsData.length > 0) {
+        const availableSlots = availableSlotsData.map(s => `• ${new Date(s.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} at ${s.hour > 12 ? s.hour - 12 : s.hour}:00 ${s.hour >= 12 ? 'PM' : 'AM'} (${s.court})`);
+        const nowStr = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+        const summary = `Here are the available slots matching your preferences as of ${nowStr}:\n\n` + availableSlots.slice(0, 10).join('\n') + (availableSlots.length > 10 ? `\n...and ${availableSlots.length - 10} more.` : '');
+        
+        await pool.query(
+          `DELETE FROM pickle_notifications WHERE user_email = $1 AND title = 'Daily Booking Summary'`,
+          [user_email]
+        );
+        await pool.query(
+          `INSERT INTO pickle_notifications (user_email, sender_email, title, message, action_data)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [user_email, 'system@bookingassistant.com', 'Daily Booking Summary', summary, JSON.stringify(availableSlotsData.slice(0, 20))]
+        );
+      }
+    }
+    res.json({ success: true, message: 'Summary generated successfully' });
+  } catch (error) {
+    console.error('Error in daily booking summary manual trigger:', error);
+    res.status(500).json({ success: false, message: 'Failed to generate summary' });
+  }
+});
+
+app.get('/api/user/booking-assistant/trigger/:email', async (req, res) => {
+  try {
+    const { email } = req.params;
+    const { rows: assistants } = await pool.query(
+      `SELECT * FROM pickle_booking_assistants WHERE is_active = TRUE AND user_email = $1 AND (expires_at IS NULL OR expires_at >= CURRENT_TIMESTAMP)`,
+      [email]
+    );
+
+    if (assistants.length === 0) {
+      return res.json({ success: false, message: 'No active booking assistant found for this user.' });
+    }
+
+    for (const assistant of assistants) {
+      const { user_email, preferred_date, preferred_time_start, preferred_time_end, court_preference } = assistant;
+      
+      const datesToCheck = [];
+      if (preferred_date) {
+        datesToCheck.push(new Date(preferred_date).toISOString().split('T')[0]);
+      } else {
+        for (let i = 0; i < 30; i++) {
+          const date = new Date();
+          date.setDate(date.getDate() + i);
+          datesToCheck.push(date.toISOString().split('T')[0]);
+        }
+      }
+
+      let courtsToCheck = [];
+      if (court_preference && court_preference !== 'Any') {
+        courtsToCheck.push(court_preference);
+      } else {
+        const { rows: courts } = await pool.query(`SELECT name FROM pickle_courts`);
+        courtsToCheck = courts.map(c => c.name);
+      }
+
+      let availableSlotsData = [];
+      for (const date of datesToCheck) {
+        for (const court of courtsToCheck) {
+          const { rows: appointments } = await pool.query(
+            `SELECT preferred_time FROM pickle_appointment 
+             WHERE service_type = $1 AND preferred_date::date = $2::date 
+             AND status NOT IN ('cancelled', 'completed')`,
+            [court, date]
+          );
+
+          const bookedTimes = appointments.map(a => a.preferred_time);
+          const startHour = parseInt(preferred_time_start.split(':')[0]);
+          const endHour = parseInt(preferred_time_end.split(':')[0]);
+
+          for (let hour = startHour; hour < endHour; hour++) {
+            const timeStr = `${hour.toString().padStart(2, '0')}:00`;
+            if (!bookedTimes.includes(timeStr) && !bookedTimes.includes(`${timeStr}:00`)) {
+              availableSlotsData.push({ date: date, court: court, time: timeStr, hour: hour });
+            }
+          }
+        }
+      }
+
+      if (availableSlotsData.length > 0) {
+        const availableSlots = availableSlotsData.map(s => `• ${new Date(s.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} at ${s.hour > 12 ? s.hour - 12 : s.hour}:00 ${s.hour >= 12 ? 'PM' : 'AM'} (${s.court})`);
+        const nowStr = new Date().toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+        const summary = `Here are the available slots matching your preferences as of ${nowStr}:\n\n` + availableSlots.slice(0, 10).join('\n') + (availableSlots.length > 10 ? `\n...and ${availableSlots.length - 10} more.` : '');
+        
+        await pool.query(
+          `DELETE FROM pickle_notifications WHERE user_email = $1 AND title = 'Daily Booking Summary'`,
+          [user_email]
+        );
+        await pool.query(
+          `INSERT INTO pickle_notifications (user_email, sender_email, title, message, action_data)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [user_email, 'system@bookingassistant.com', 'Daily Booking Summary', summary, JSON.stringify(availableSlotsData.slice(0, 20))]
+        );
+      }
+    }
+    res.json({ success: true, message: 'Summary generated successfully' });
+  } catch (error) {
+    console.error('Error in user booking summary manual trigger:', error);
+    res.status(500).json({ success: false, message: 'Failed to generate summary' });
+  }
+});
+
 // Cancel a user booking
 app.post('/api/user/bookings/cancel', async (req, res) => {
   try {
@@ -5456,10 +5812,36 @@ app.post('/api/user/bookings/cancel', async (req, res) => {
       [bookingId]
     );
 
+    // Notify any matching booking assistants
+    notifyBookingAssistants(booking.service_type, booking.preferred_date, booking.preferred_time);
+
     res.json({ success: true, message: 'Booking cancelled successfully' });
   } catch (err) {
     console.error('Cancel booking error:', err);
     res.status(500).json({ success: false, message: 'Failed to cancel booking' });
+  }
+});
+
+// Create booking assistant request
+app.post('/api/user/booking-assistant', async (req, res) => {
+  try {
+    const { email, preferredDate, preferredTimeStart, preferredTimeEnd, courtPreference, paymentReference } = req.body;
+    
+    if (!email || !preferredTimeStart || !preferredTimeEnd || !paymentReference) {
+      return res.status(400).json({ success: false, message: 'Missing required fields' });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO pickle_booking_assistants 
+       (user_email, preferred_date, preferred_time_start, preferred_time_end, court_preference, payment_reference, expires_at)
+       VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP + INTERVAL '30 days') RETURNING *`,
+      [email, preferredDate || null, preferredTimeStart, preferredTimeEnd, courtPreference || 'Any', paymentReference]
+    );
+
+    res.json({ success: true, assistant: result.rows[0], message: 'Booking Assistant activated!' });
+  } catch (err) {
+    console.error('Booking assistant creation error:', err);
+    res.status(500).json({ success: false, message: 'Failed to activate Booking Assistant' });
   }
 });
 
@@ -5481,15 +5863,19 @@ app.get('/api/owner/bookings/:email', async (req, res) => {
   }
 });
 
-// Block a slot for maintenance
+// Block a slot for maintenance or offline booking
 app.post('/api/owner/slots/block', async (req, res) => {
   try {
-    const { ownerEmail, courtName, date, time } = req.body;
+    const { ownerEmail, courtName, date, time, playerName } = req.body;
     
+    const blockName = playerName && playerName.trim() !== '' 
+      ? `Offline Booking: ${playerName}` 
+      : 'Maintenance Block';
+
     await pool.query(
       `INSERT INTO pickle_appointment (full_name, phone_number, email, service_type, preferred_date, preferred_time, status)
-       VALUES ('Maintenance Block', '00000000000', $1, $2, $3, $4, 'blocked')`,
-      [ownerEmail, courtName, date, time]
+       VALUES ($1, '00000000000', $2, $3, $4, $5, 'blocked')`,
+      [blockName, ownerEmail, courtName, date, time]
     );
     
     res.json({ success: true, message: 'Slot blocked successfully' });
@@ -5529,6 +5915,9 @@ app.post('/api/owner/appointments/cancel', async (req, res) => {
       [courtName, date, time]
     );
     
+    // Notify any matching booking assistants
+    notifyBookingAssistants(courtName, date, time);
+
     res.json({ success: true, message: 'Reservation cancelled successfully' });
   } catch (err) {
     console.error('Cancel reservation error:', err);
@@ -5541,15 +5930,18 @@ app.post('/api/owner/appointments/cancel', async (req, res) => {
 
 app.post('/api/courts', async (req, res) => {
   try {
-    const { ownerEmail, name, duration, basePrice, hourlyPrices, description, address, facilities, latitude, longitude } = req.body;
+    const { ownerEmail, name, courtNumber, duration, basePrice, hourlyPrices, description, address, facilities, latitude, longitude } = req.body;
     const result = await pool.query(
-      `INSERT INTO pickle_courts (owner_email, name, duration, base_price, hourly_prices, description, address, facilities, latitude, longitude)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
-      [ownerEmail, name, duration || 30, basePrice || 0, JSON.stringify(hourlyPrices || []), description || '', address || '', JSON.stringify(facilities || []), latitude || null, longitude || null]
+      `INSERT INTO pickle_courts (owner_email, name, court_number, duration, base_price, hourly_prices, description, address, facilities, latitude, longitude)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
+      [ownerEmail, name, courtNumber || null, duration || 30, basePrice || 0, JSON.stringify(hourlyPrices || []), description || '', address || '', JSON.stringify(facilities || []), latitude || null, longitude || null]
     );
     res.status(201).json({ success: true, court: result.rows[0] });
   } catch (error) {
     console.error('Error adding court:', error);
+    if (error.code === '23505') {
+      return res.status(400).json({ success: false, message: 'A court with this Name and Court Number already exists.' });
+    }
     res.status(500).json({ success: false, message: 'Failed to add court' });
   }
 });
@@ -5590,12 +5982,12 @@ app.get('/api/courts/:email', async (req, res) => {
 app.put('/api/courts/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, duration, basePrice, hourlyPrices, description, address, facilities, latitude, longitude } = req.body;
+    const { name, courtNumber, duration, basePrice, hourlyPrices, description, address, facilities, latitude, longitude } = req.body;
     const result = await pool.query(
       `UPDATE pickle_courts 
-       SET name = $1, duration = $2, base_price = $3, hourly_prices = $4, description = $5, address = $6, facilities = $7, latitude = $8, longitude = $9, updated_at = NOW()
-       WHERE id = $10 RETURNING *`,
-      [name, duration || 30, basePrice || 0, JSON.stringify(hourlyPrices || []), description || '', address || '', JSON.stringify(facilities || []), latitude || null, longitude || null, id]
+       SET name = $1, court_number = $2, duration = $3, base_price = $4, hourly_prices = $5, description = $6, address = $7, facilities = $8, latitude = $9, longitude = $10, updated_at = NOW()
+       WHERE id = $11 RETURNING *`,
+      [name, courtNumber || null, duration || 30, basePrice || 0, JSON.stringify(hourlyPrices || []), description || '', address || '', JSON.stringify(facilities || []), latitude || null, longitude || null, id]
     );
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Court not found' });
@@ -5603,6 +5995,9 @@ app.put('/api/courts/:id', async (req, res) => {
     res.json({ success: true, court: result.rows[0] });
   } catch (error) {
     console.error('Error updating court:', error);
+    if (error.code === '23505') {
+      return res.status(400).json({ success: false, message: 'A court with this Name and Court Number already exists.' });
+    }
     res.status(500).json({ success: false, message: 'Failed to update court' });
   }
 });
@@ -5747,6 +6142,17 @@ app.post('/api/notifications', async (req, res) => {
   }
 });
 
+app.delete('/api/notifications/:email', async (req, res) => {
+  try {
+    const { email } = req.params;
+    await pool.query('DELETE FROM pickle_notifications WHERE user_email = $1', [email]);
+    res.json({ success: true, message: 'Notifications cleared successfully' });
+  } catch (error) {
+    console.error('Error clearing notifications:', error);
+    res.status(500).json({ success: false, message: 'Failed to clear notifications' });
+  }
+});
+
 app.put('/api/notifications/:id/read', async (req, res) => {
   try {
     const { id } = req.params;
@@ -5763,16 +6169,21 @@ app.put('/api/notifications/:id/read', async (req, res) => {
 // GET /api/open-plays
 app.get('/api/open-plays', async (req, res) => {
   try {
+    const { email } = req.query;
     const query = `
       SELECT
         a.*,
         COALESCE(p.participants_count, 0)::int AS current_participants,
         (a.open_play_max_players - COALESCE(p.participants_count, 0))::int AS spots_left,
-        u.full_name as host_name
+        u.full_name as host_name,
+        CASE WHEN $1::text IS NOT NULL THEN
+          EXISTS(SELECT 1 FROM pickle_open_play_participants pp WHERE pp.appointment_id = a.id AND pp.user_email = $1)
+        ELSE false END as has_joined
       FROM pickle_appointment a
       LEFT JOIN (
-        SELECT appointment_id, COUNT(*) as participants_count
+        SELECT appointment_id, COALESCE(SUM(1 + COALESCE(guest_count, 0)), 0) as participants_count
         FROM pickle_open_play_participants
+        WHERE status != 'rejected'
         GROUP BY appointment_id
       ) p ON a.id = p.appointment_id
       LEFT JOIN users u ON a.email = u.email
@@ -5781,7 +6192,7 @@ app.get('/api/open-plays', async (req, res) => {
         AND a.preferred_date >= CURRENT_DATE
       ORDER BY a.preferred_date ASC, a.preferred_time ASC
     `;
-    const result = await pool.query(query);
+    const result = await pool.query(query, [email || null]);
     res.json({ success: true, openPlays: result.rows });
   } catch (err) {
     console.error('Fetch open plays error:', err);
@@ -5794,6 +6205,7 @@ app.post('/api/open-plays/join', upload.single('proofOfPayment'), async (req, re
   try {
     const { appointmentId, userEmail } = req.body;
     const proofOfPayment = req.body.proofOfPayment || (req.file ? req.file.path : null);
+    const guestCount = parseInt(req.body.guestCount || 0, 10);
     
     const appointmentIds = req.body.appointmentId.split(',').map(id => id.trim());
     
@@ -5807,8 +6219,9 @@ app.post('/api/open-plays/join', upload.single('proofOfPayment'), async (req, re
         SELECT a.open_play_max_players, COALESCE(p.participants_count, 0) as current_participants
         FROM pickle_appointment a
         LEFT JOIN (
-          SELECT appointment_id, COUNT(*) as participants_count
+          SELECT appointment_id, COALESCE(SUM(1 + COALESCE(guest_count, 0)), 0) as participants_count
           FROM pickle_open_play_participants
+          WHERE status != 'rejected'
           GROUP BY appointment_id
         ) p ON a.id = p.appointment_id
         WHERE a.id = $1
@@ -5818,8 +6231,8 @@ app.post('/api/open-plays/join', upload.single('proofOfPayment'), async (req, re
         return res.status(404).json({ success: false, message: `Open play not found for id ${id}` });
       }
       
-      if (checkResult.rows[0].current_participants >= checkResult.rows[0].open_play_max_players) {
-        return res.status(400).json({ success: false, message: 'One or more of the selected time slots are full' });
+      if (checkResult.rows[0].current_participants + (1 + guestCount) > checkResult.rows[0].open_play_max_players) {
+        return res.status(400).json({ success: false, message: 'One or more of the selected time slots do not have enough spots left' });
       }
     }
 
@@ -5827,8 +6240,8 @@ app.post('/api/open-plays/join', upload.single('proofOfPayment'), async (req, re
     for (const id of appointmentIds) {
       try {
         await pool.query(
-          `INSERT INTO pickle_open_play_participants (appointment_id, user_email, payment_proof) VALUES ($1, $2, $3)`,
-          [id, userEmail, proofOfPayment]
+          `INSERT INTO pickle_open_play_participants (appointment_id, user_email, payment_proof, guest_count) VALUES ($1, $2, $3, $4)`,
+          [id, userEmail, proofOfPayment, guestCount]
         );
       } catch (err) {
         if (err.code !== '23505') throw err; // ignore duplicate errors if they already joined one of them
@@ -5842,20 +6255,156 @@ app.post('/api/open-plays/join', upload.single('proofOfPayment'), async (req, re
   }
 });
 
+// PATCH /api/open-plays/:id
+app.patch('/api/open-plays/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const {
+      openPlayType,
+      openPlayMaxPlayers,
+      openPlayPrice,
+      openPlayInstructions,
+      openPlayPaymentDetails
+    } = req.body;
+
+    const query = `
+      UPDATE pickle_appointment 
+      SET 
+        open_play_type = $1,
+        open_play_max_players = $2,
+        open_play_price = $3,
+        open_play_instructions = $4,
+        open_play_payment_details = $5
+      WHERE id = $6 AND is_open_play = true
+      RETURNING *
+    `;
+
+    const values = [
+      openPlayType || 'DOUBLES',
+      openPlayMaxPlayers ? parseInt(openPlayMaxPlayers) : 4,
+      openPlayPrice ? parseFloat(openPlayPrice) : 0.00,
+      openPlayInstructions || null,
+      openPlayPaymentDetails || null,
+      id
+    ];
+
+    const result = await pool.query(query, values);
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'Open play not found' });
+    }
+
+    res.json({ success: true, openPlay: result.rows[0] });
+  } catch (err) {
+    console.error('Update open play error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// GET /api/open-plays/hosted/:email
+app.get('/api/open-plays/hosted/:email', async (req, res) => {
+  try {
+    const { email } = req.params;
+    const query = `
+      SELECT a.*, 
+        COALESCE(p.participants_count, 0) as current_participants,
+        u.full_name as host_name
+      FROM pickle_appointment a
+      LEFT JOIN users u ON a.email = u.email
+      LEFT JOIN (
+        SELECT appointment_id, COALESCE(SUM(1 + COALESCE(guest_count, 0)), 0) as participants_count
+        FROM pickle_open_play_participants
+        WHERE status != 'rejected'
+        GROUP BY appointment_id
+      ) p ON a.id = p.appointment_id
+      WHERE a.is_open_play = true AND a.email = $1
+      ORDER BY a.preferred_date DESC, a.preferred_time DESC
+    `;
+    const result = await pool.query(query, [email]);
+    res.json({ success: true, openPlays: result.rows });
+  } catch (err) {
+    console.error('Fetch hosted open plays error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// GET /api/open-plays/:id/participants
+app.get('/api/open-plays/:id/participants', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const query = `
+      SELECT DISTINCT ON (p.user_email) p.id, p.user_email, p.payment_proof, p.joined_at, u.full_name, p.status, p.guest_count
+      FROM pickle_open_play_participants p
+      LEFT JOIN users u ON p.user_email = u.email
+      WHERE p.appointment_id = ANY(string_to_array($1, ',')::int[])
+      ORDER BY p.user_email, p.joined_at DESC
+    `;
+    const result = await pool.query(query, [id]);
+    res.json({ success: true, participants: result.rows });
+  } catch (err) {
+    console.error('Fetch open play participants error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// PUT /api/open-plays/participants/status
+app.put('/api/open-plays/participants/status', async (req, res) => {
+  const { userEmail, appointmentIds, status } = req.body;
+  try {
+    await pool.query(
+      `UPDATE pickle_open_play_participants 
+       SET status = $1 
+       WHERE user_email = $2 AND appointment_id = ANY(string_to_array($3, ',')::int[])`,
+      [status, userEmail, appointmentIds]
+    );
+
+    if (status === 'approved') {
+      const firstId = appointmentIds.split(',')[0].trim();
+      const playQuery = `
+        SELECT service_type, 
+               to_char(preferred_date, 'Mon DD, YYYY') as f_date, 
+               preferred_time 
+        FROM pickle_appointment 
+        WHERE id = $1
+      `;
+      const playRes = await pool.query(playQuery, [firstId]);
+      
+      let chatMsg = 'Your request to join the Open Play has been approved!';
+      let notifMsg = 'You have been approved to join the Open Play session.';
+      
+      if (playRes.rows.length > 0) {
+        const p = playRes.rows[0];
+        chatMsg = `Your request to join the Open Play (${p.service_type}) on ${p.f_date} at ${p.preferred_time} has been approved!`;
+        notifMsg = `You have been approved to join the Open Play on ${p.f_date} at ${p.preferred_time}.`;
+      }
+
+      // Notify the user via chat message and push notification
+      const msgQuery = `
+        INSERT INTO pickle_messages (sender_email, receiver_email, court_name, message)
+        VALUES ('System', $1, 'Open Play', $2)
+      `;
+      await pool.query(msgQuery, [userEmail, chatMsg]);
+
+      const notifQuery = `
+        INSERT INTO pickle_notifications (user_email, sender_email, title, message)
+        VALUES ($1, 'System', 'Open Play Approved', $2)
+      `;
+      await pool.query(notifQuery, [userEmail, notifMsg]);
+    }
+    
+    // Optional: Notify on rejection based on future requirements
+
+    res.json({ success: true, message: 'Status updated successfully' });
+  } catch (err) {
+    console.error('Update participant status error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
 // Serve React static files in production
 const frontendDistPath = path.join(__dirname, '../dist');
 app.use(express.static(frontendDistPath));
 
-// Catch-all route for React Router (must be the LAST route)
-app.get('*', (req, res) => {
-  if (fs.existsSync(path.join(frontendDistPath, 'index.html'))) {
-    res.sendFile(path.join(frontendDistPath, 'index.html'));
-  } else {
-    res.status(404).send('Frontend build not found. Please run "npm run build" in the root directory.');
-  }
-});
-
-// Initialize clinic settings table + seed defaults, then start server
 // Get owner earnings
 app.get('/api/owner-earnings/:email', async (req, res) => {
   try {
@@ -5863,7 +6412,8 @@ app.get('/api/owner-earnings/:email', async (req, res) => {
     
     // Fetch all bookings for courts owned by this owner
     // We assume specialist_id is used to store the court ID
-    const query = `
+    const { startDate, endDate } = req.query;
+    let query = `
       SELECT 
         a.id, 
         a.full_name as player_name,
@@ -5880,10 +6430,18 @@ app.get('/api/owner-earnings/:email', async (req, res) => {
       WHERE c.owner_email = $1 
         AND a.status != 'cancelled'
         AND a.status != 'blocked'
-      ORDER BY a.created_at DESC
     `;
     
-    const { rows } = await pool.query(query, [ownerEmail]);
+    const params = [ownerEmail];
+    
+    if (startDate && endDate) {
+      query += ` AND DATE(a.created_at) >= $2 AND DATE(a.created_at) <= $3`;
+      params.push(startDate, endDate);
+    }
+    
+    query += ` ORDER BY a.created_at DESC`;
+    
+    const { rows } = await pool.query(query, params);
     
     // Calculate totals
     let grossEarnings = 0;
@@ -5919,6 +6477,17 @@ app.get('/api/owner-earnings/:email', async (req, res) => {
   }
 });
 
+
+// Catch-all route for React Router (must be the LAST route)
+app.get('*', (req, res) => {
+  if (fs.existsSync(path.join(frontendDistPath, 'index.html'))) {
+    res.sendFile(path.join(frontendDistPath, 'index.html'));
+  } else {
+    res.status(404).send('Frontend build not found. Please run "npm run build" in the root directory.');
+  }
+});
+
+// Initialize clinic settings table + seed defaults, then start server
 initClinicSettings()
   .then(() => loadSettings())
   .then(async () => {
