@@ -13,6 +13,17 @@ require('dotenv').config({ path: path.join(__dirname, '.env') });
 const { OAuth2Client } = require('google-auth-library');
 const googleClient = new OAuth2Client('791853418225-nnsmvmfnabhqlevkevbp8549mccha2he.apps.googleusercontent.com');
 const axios = require('axios');
+const admin = require('firebase-admin');
+try {
+  const serviceAccount = require('./firebase-admin-key.json');
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount)
+  });
+  global.firebaseAdmin = admin;
+  console.log("Firebase Admin initialized successfully.");
+} catch (error) {
+  console.error("Firebase Admin initialization failed. Ensure firebase-admin-key.json exists.");
+}
 const app = express();
 const server = http.createServer(app);
 const PORT = process.env.PORT || 5000;
@@ -231,6 +242,17 @@ const initMessagingTables = async () => {
   await pool.query(`ALTER TABLE staff_pm ADD COLUMN IF NOT EXISTS attachment_name TEXT`);
   await pool.query(`ALTER TABLE staff_pm ADD COLUMN IF NOT EXISTS attachment_mime TEXT`);
   await pool.query(`ALTER TABLE staff_pm ALTER COLUMN message DROP NOT NULL`);
+
+  // Password resets table
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS password_resets (
+      id SERIAL PRIMARY KEY,
+      email TEXT NOT NULL,
+      otp TEXT NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
 
   // Corporate Accounts table
   await pool.query(`
@@ -5508,14 +5530,16 @@ app.put('/api/user/profile/:id', async (req, res) => {
 app.get('/api/user/bookings/:email', async (req, res) => {
   try {
     const { email } = req.params;
+    console.log(`[GET] /api/user/bookings/${email}`);
     const { rows } = await pool.query(
-      `SELECT a.*, a.preferred_date as appointment_date, a.preferred_time as appointment_time, c.address as court_address 
+      `SELECT a.*, a.preferred_date as appointment_date, a.preferred_time as appointment_time, c.address as court_address, c.latitude as court_lat, c.longitude as court_lng 
        FROM pickle_appointment a 
        LEFT JOIN pickle_courts c ON a.service_type = c.name 
        WHERE a.email = $1 
        ORDER BY a.preferred_date DESC, a.preferred_time DESC`,
       [email]
     );
+    console.log(`Returned ${rows.length} bookings for ${email}.`);
     res.json({ success: true, bookings: rows });
   } catch (err) {
     console.error('Fetch bookings error:', err);
@@ -5773,10 +5797,31 @@ app.get('/api/user/booking-assistant/trigger/:email', async (req, res) => {
           [user_email]
         );
         await pool.query(
-          `INSERT INTO pickle_notifications (user_email, sender_email, title, message, action_data)
-           VALUES ($1, $2, $3, $4, $5)`,
-          [user_email, 'system@bookingassistant.com', 'Daily Booking Summary', summary, JSON.stringify(availableSlotsData.slice(0, 20))]
+          `INSERT INTO pickle_notifications (user_email, sender_email, title, message)
+           VALUES ($1, $2, $3, $4)`,
+          [user_email, 'system@bookingassistant.com', 'Daily Booking Summary', summary]
         );
+
+        // Send push notification via FCM
+        try {
+          const { rows: tokens } = await pool.query(
+            `SELECT fcm_token FROM pickle_fcm_tokens WHERE user_email = $1`,
+            [user_email]
+          );
+          if (tokens.length > 0 && global.firebaseAdmin) {
+            const tokenList = tokens.map(t => t.fcm_token);
+            await global.firebaseAdmin.messaging().sendEachForMulticast({
+              tokens: tokenList,
+              notification: {
+                title: 'Daily Booking Summary',
+                body: 'Your Booking Assistant has found available slots! Tap to view.'
+              }
+            });
+            console.log(`Push notification sent to ${user_email} (${tokenList.length} devices)`);
+          }
+        } catch (fcmErr) {
+          console.error('FCM Push Notification error:', fcmErr);
+        }
       }
     }
     res.json({ success: true, message: 'Summary generated successfully' });
@@ -5823,6 +5868,24 @@ app.post('/api/user/bookings/cancel', async (req, res) => {
 });
 
 // Create booking assistant request
+app.post('/api/user/fcm-token', async (req, res) => {
+  const { email, token } = req.body;
+  if (!email || !token) return res.status(400).json({ success: false, message: 'Missing email or token' });
+
+  try {
+    await pool.query(
+      `INSERT INTO pickle_fcm_tokens (user_email, fcm_token) 
+       VALUES ($1, $2) 
+       ON CONFLICT (user_email, fcm_token) DO NOTHING`,
+      [email, token]
+    );
+    res.json({ success: true, message: 'Token saved' });
+  } catch (error) {
+    console.error('Error saving FCM token:', error);
+    res.status(500).json({ success: false, message: 'Failed to save token' });
+  }
+});
+
 app.post('/api/user/booking-assistant', async (req, res) => {
   try {
     const { email, preferredDate, preferredTimeStart, preferredTimeEnd, courtPreference, paymentReference } = req.body;
@@ -6484,6 +6547,69 @@ app.get('*', (req, res) => {
     res.sendFile(path.join(frontendDistPath, 'index.html'));
   } else {
     res.status(404).send('Frontend build not found. Please run "npm run build" in the root directory.');
+  }
+});
+// ==================== FORGOT PASSWORD ====================
+app.post('/api/user/forgot-password', async (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ success: false, message: 'Email required' });
+
+  try {
+    const userResult = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = new Date(Date.now() + 15 * 60000); // 15 mins
+
+    await pool.query(
+      'INSERT INTO password_resets (email, otp, expires_at) VALUES ($1, $2, $3)',
+      [email, otp, expiresAt]
+    );
+
+    const mailOptions = {
+      from: `"${getSetting('clinic_name', 'System')}" <${process.env.EMAIL_USER}>`,
+      to: email,
+      subject: 'Password Reset OTP',
+      text: `Your password reset OTP is: ${otp}\nIt will expire in 15 minutes.`
+    };
+    await transporter.sendMail(mailOptions);
+
+    res.json({ success: true, message: 'OTP sent to email' });
+  } catch (error) {
+    console.error('Forgot password error:', error);
+    res.status(500).json({ success: false, message: 'Failed to process request' });
+  }
+});
+
+app.post('/api/user/reset-password', async (req, res) => {
+  const { email, otp, newPassword } = req.body;
+  if (!email || !otp || !newPassword) return res.status(400).json({ success: false, message: 'All fields required' });
+
+  try {
+    const resetResult = await pool.query(
+      'SELECT * FROM password_resets WHERE email = $1 AND otp = $2 ORDER BY created_at DESC LIMIT 1',
+      [email, otp]
+    );
+
+    if (resetResult.rows.length === 0) {
+      return res.status(400).json({ success: false, message: 'Invalid OTP' });
+    }
+
+    const resetRecord = resetResult.rows[0];
+    if (new Date(resetRecord.expires_at) < new Date()) {
+      return res.status(400).json({ success: false, message: 'OTP expired' });
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+    await pool.query('UPDATE users SET password = $1 WHERE email = $2', [hashedPassword, email]);
+    await pool.query('DELETE FROM password_resets WHERE email = $1', [email]);
+
+    res.json({ success: true, message: 'Password reset successful' });
+  } catch (error) {
+    console.error('Reset password error:', error);
+    res.status(500).json({ success: false, message: 'Failed to reset password' });
   }
 });
 
