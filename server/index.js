@@ -6252,7 +6252,7 @@ app.get('/api/open-plays', async (req, res) => {
       LEFT JOIN users u ON a.email = u.email
       WHERE a.is_open_play = true
         AND a.status != 'cancelled'
-        AND a.preferred_date >= CURRENT_DATE
+        AND a.preferred_date >= CURRENT_DATE - INTERVAL '1 day'
       ORDER BY a.preferred_date ASC, a.preferred_time ASC
     `;
     const result = await pool.query(query, [email || null]);
