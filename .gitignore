@@ -32,3 +32,6 @@ server/uploads/
 
 # Database dumps (Too large for GitHub)
 *.sql
+
+# Secrets
+server/firebase-admin-key.json

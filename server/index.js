@@ -601,7 +601,11 @@ app.post('/api/appointments', async (req, res) => {
       openPlayMaxPlayers,
       openPlayPrice,
       openPlayInstructions,
-      openPlayPaymentDetails
+      openPlayPaymentDetails,
+      isOpenChallenge,
+      challengeType,
+      hostTandemName,
+      challengeDescription
     } = req.body;
 
     // Validate required fields
@@ -691,9 +695,10 @@ app.post('/api/appointments', async (req, res) => {
         pickup_lat, pickup_lng, dest_lat, dest_lng,
         total_amount, corporate_account_id, payment_method, proof_of_payment,
         is_open_play, open_play_type, open_play_max_players, open_play_price,
-        open_play_instructions, open_play_payment_details, status
+        open_play_instructions, open_play_payment_details, status,
+        is_open_challenge, challenge_type, host_tandem_name, challenge_description
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, 'confirmed')
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, 'confirmed', $27, $28, $29, $30)
       RETURNING *
     `;
 
@@ -723,7 +728,11 @@ app.post('/api/appointments', async (req, res) => {
       openPlayMaxPlayers ? parseInt(openPlayMaxPlayers) : 4,
       openPlayPrice ? parseFloat(openPlayPrice) : 0.00,
       openPlayInstructions || null,
-      openPlayPaymentDetails || null
+      openPlayPaymentDetails || null,
+      isOpenChallenge === true,
+      challengeType || 'singles',
+      hostTandemName || null,
+      challengeDescription || null
     ];
     const result = await pool.query(query, values);
 
@@ -5532,10 +5541,11 @@ app.get('/api/user/bookings/:email', async (req, res) => {
     const { email } = req.params;
     console.log(`[GET] /api/user/bookings/${email}`);
     const { rows } = await pool.query(
-      `SELECT a.*, a.preferred_date as appointment_date, a.preferred_time as appointment_time, c.address as court_address, c.latitude as court_lat, c.longitude as court_lng 
+      `SELECT DISTINCT a.*, a.preferred_date as appointment_date, a.preferred_time as appointment_time, c.address as court_address, c.latitude as court_lat, c.longitude as court_lng 
        FROM pickle_appointment a 
        LEFT JOIN pickle_courts c ON a.service_type = c.name 
-       WHERE a.email = $1 
+       LEFT JOIN pickle_open_play_participants p ON a.id = p.appointment_id
+       WHERE a.email = $1 OR (p.user_email = $1 AND p.status != 'rejected')
        ORDER BY a.preferred_date DESC, a.preferred_time DESC`,
       [email]
     );
@@ -6371,7 +6381,8 @@ app.get('/api/open-plays/hosted/:email', async (req, res) => {
     const query = `
       SELECT a.*, 
         COALESCE(p.participants_count, 0) as current_participants,
-        u.full_name as host_name
+        u.full_name as host_name,
+        a.challenge_description
       FROM pickle_appointment a
       LEFT JOIN users u ON a.email = u.email
       LEFT JOIN (
@@ -6460,6 +6471,98 @@ app.put('/api/open-plays/participants/status', async (req, res) => {
     res.json({ success: true, message: 'Status updated successfully' });
   } catch (err) {
     console.error('Update participant status error:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// ==================== OPEN CHALLENGES ====================
+
+// GET /api/open-challenges
+app.get('/api/open-challenges', async (req, res) => {
+  try {
+    let query = `
+      SELECT id, full_name as host_name, service_type, 
+             to_char(preferred_date, 'YYYY-MM-DD') as preferred_date, 
+             preferred_time, is_open_challenge, challenge_type, host_tandem_name, challenge_description,
+             email as host_email
+      FROM pickle_appointment 
+      WHERE is_open_challenge = true 
+        AND preferred_date >= CURRENT_DATE 
+        AND status = 'confirmed'
+      ORDER BY preferred_date ASC, preferred_time ASC
+    `;
+
+    const result = await pool.query(query);
+    res.json({ success: true, challenges: result.rows });
+  } catch (err) {
+    console.error('Error fetching open challenges:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// POST /api/challenges/apply
+app.post('/api/challenges/apply', async (req, res) => {
+  try {
+    const { appointmentId, challengerEmail, challengerName } = req.body;
+    
+    // Check if already applied
+    const checkQuery = `SELECT id FROM pickle_challenge_requests WHERE appointment_id = $1 AND challenger_email = $2`;
+    const checkRes = await pool.query(checkQuery, [appointmentId, challengerEmail]);
+    if (checkRes.rows.length > 0) {
+      return res.status(400).json({ success: false, message: 'You have already applied to this challenge.' });
+    }
+
+    const insertQuery = `
+      INSERT INTO pickle_challenge_requests (appointment_id, challenger_email, challenger_name, status)
+      VALUES ($1, $2, $3, 'pending')
+      RETURNING *
+    `;
+    const result = await pool.query(insertQuery, [appointmentId, challengerEmail, challengerName]);
+    res.json({ success: true, request: result.rows[0] });
+  } catch (err) {
+    console.error('Error applying to challenge:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// GET /api/challenges/:id/requests
+app.get('/api/challenges/:id/requests', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const query = `
+      SELECT * FROM pickle_challenge_requests 
+      WHERE appointment_id = $1 
+      ORDER BY created_at ASC
+    `;
+    const result = await pool.query(query, [id]);
+    res.json({ success: true, requests: result.rows });
+  } catch (err) {
+    console.error('Error fetching challenge requests:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// POST /api/challenges/accept
+app.post('/api/challenges/accept', async (req, res) => {
+  try {
+    const { requestId, appointmentId } = req.body;
+    
+    await pool.query('BEGIN');
+    
+    // Accept this request
+    await pool.query(`UPDATE pickle_challenge_requests SET status = 'accepted' WHERE id = $1`, [requestId]);
+    
+    // Reject all others for this appointment
+    await pool.query(`UPDATE pickle_challenge_requests SET status = 'rejected' WHERE appointment_id = $1 AND id != $2`, [appointmentId, requestId]);
+    
+    // Close the challenge so no more applications show up
+    await pool.query(`UPDATE pickle_appointment SET is_open_challenge = false WHERE id = $1`, [appointmentId]);
+    
+    await pool.query('COMMIT');
+    res.json({ success: true, message: 'Challenger accepted successfully' });
+  } catch (err) {
+    await pool.query('ROLLBACK');
+    console.error('Error accepting challenger:', err);
     res.status(500).json({ success: false, message: 'Server error' });
   }
 });
