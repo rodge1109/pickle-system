@@ -5534,17 +5534,17 @@ app.put('/api/user/profile/:id', async (req, res) => {
   } catch (err) {
     console.error('Profile update error:', err);
     res.status(500).json({ success: false, message: 'Profile update failed' });
-  }
-});
 app.get('/api/user/bookings/:email', async (req, res) => {
   try {
     const { email } = req.params;
     console.log(`[GET] /api/user/bookings/${email}`);
     const { rows } = await pool.query(
-      `SELECT DISTINCT a.*, a.preferred_date as appointment_date, a.preferred_time as appointment_time, c.address as court_address, c.latitude as court_lat, c.longitude as court_lng 
+      `SELECT DISTINCT a.*, a.preferred_date as appointment_date, a.preferred_time as appointment_time, c.address as court_address, c.latitude as court_lat, c.longitude as court_lng,
+       req.challenger_name as accepted_challenger_name
        FROM pickle_appointment a 
        LEFT JOIN pickle_courts c ON a.service_type = c.name 
        LEFT JOIN pickle_open_play_participants p ON a.id = p.appointment_id
+       LEFT JOIN pickle_challenge_requests req ON a.id = req.appointment_id AND req.status = 'accepted'
        WHERE a.email = $1 OR (p.user_email = $1 AND p.status != 'rejected')
        ORDER BY a.preferred_date DESC, a.preferred_time DESC`,
       [email]
@@ -6481,15 +6481,17 @@ app.put('/api/open-plays/participants/status', async (req, res) => {
 app.get('/api/open-challenges', async (req, res) => {
   try {
     let query = `
-      SELECT id, full_name as host_name, service_type, 
-             to_char(preferred_date, 'YYYY-MM-DD') as preferred_date, 
-             preferred_time, is_open_challenge, challenge_type, host_tandem_name, challenge_description,
-             email as host_email
-      FROM pickle_appointment 
-      WHERE is_open_challenge = true 
-        AND preferred_date >= CURRENT_DATE 
-        AND status = 'confirmed'
-      ORDER BY preferred_date ASC, preferred_time ASC
+      SELECT a.id, a.full_name as host_name, a.service_type, 
+             to_char(a.preferred_date, 'YYYY-MM-DD') as preferred_date, 
+             a.preferred_time, a.is_open_challenge, a.challenge_type, a.host_tandem_name, a.challenge_description,
+             a.email as host_email,
+             req.challenger_name as accepted_challenger_name
+      FROM pickle_appointment a
+      LEFT JOIN pickle_challenge_requests req ON a.id = req.appointment_id AND req.status = 'accepted'
+      WHERE a.is_open_challenge = true 
+        AND a.preferred_date >= CURRENT_DATE 
+        AND a.status = 'confirmed'
+      ORDER BY a.preferred_date ASC, a.preferred_time ASC
     `;
 
     const result = await pool.query(query);
@@ -6555,8 +6557,15 @@ app.post('/api/challenges/accept', async (req, res) => {
     // Reject all others for this appointment
     await pool.query(`UPDATE pickle_challenge_requests SET status = 'rejected' WHERE appointment_id = $1 AND id != $2`, [appointmentId, requestId]);
     
-    // Close the challenge so no more applications show up
-    await pool.query(`UPDATE pickle_appointment SET is_open_challenge = false WHERE id = $1`, [appointmentId]);
+    // Add the challenger to participants so it appears in their Next Booking
+    const reqInfo = await pool.query(`SELECT challenger_email, challenger_name FROM pickle_challenge_requests WHERE id = $1`, [requestId]);
+    if (reqInfo.rows.length > 0) {
+      const c = reqInfo.rows[0];
+      await pool.query(
+        `INSERT INTO pickle_open_play_participants (appointment_id, user_email, user_name, status) VALUES ($1, $2, $3, 'approved')`,
+        [appointmentId, c.challenger_email, c.challenger_name]
+      );
+    }
     
     await pool.query('COMMIT');
     res.json({ success: true, message: 'Challenger accepted successfully' });
