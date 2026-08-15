@@ -5534,6 +5534,9 @@ app.put('/api/user/profile/:id', async (req, res) => {
   } catch (err) {
     console.error('Profile update error:', err);
     res.status(500).json({ success: false, message: 'Profile update failed' });
+  }
+});
+
 app.get('/api/user/bookings/:email', async (req, res) => {
   try {
     const { email } = req.params;
