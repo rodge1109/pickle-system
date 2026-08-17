@@ -6604,7 +6604,7 @@ app.get('/api/owner-earnings/:email', async (req, res) => {
         a.created_at,
         c.name as court_name
       FROM pickle_appointment a
-      JOIN pickle_courts c ON a.specialist_id = c.id
+      JOIN pickle_courts c ON a.service_type = c.name
       WHERE c.owner_email = $1 
         AND a.status != 'cancelled'
         AND a.status != 'blocked'
