@@ -3361,7 +3361,9 @@ app.get('/api/booking-services', async (_req, res) => {
           paymaya_number: c.paymaya_number,
           bank_account: c.bank_account,
           bank_account_name: c.bank_account_name
-        }
+        },
+        open_time: c.open_time || '00:00',
+        close_time: c.close_time || '23:59'
       };
     });
     
@@ -6006,11 +6008,22 @@ app.post('/api/owner/appointments/cancel', async (req, res) => {
 
 app.post('/api/courts', async (req, res) => {
   try {
-    const { ownerEmail, name, courtNumber, duration, basePrice, hourlyPrices, description, address, facilities, latitude, longitude } = req.body;
+    const { 
+      name, ownerEmail, duration, description, 
+      basePrice, hourlyPrices, address, facilities, courtNumber,
+      latitude, longitude, openTime, closeTime 
+    } = req.body;
+    
     const result = await pool.query(
-      `INSERT INTO pickle_courts (owner_email, name, court_number, duration, base_price, hourly_prices, description, address, facilities, latitude, longitude)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING *`,
-      [ownerEmail, name, courtNumber || null, duration || 30, basePrice || 0, JSON.stringify(hourlyPrices || []), description || '', address || '', JSON.stringify(facilities || []), latitude || null, longitude || null]
+      `INSERT INTO pickle_courts 
+        (name, owner_email, duration, description, active, base_price, hourly_prices, address, facilities, court_number, latitude, longitude, open_time, close_time) 
+       VALUES ($1, $2, $3, $4, true, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
+      [
+        name, ownerEmail, duration || 30, description || '', 
+        basePrice || 0, hourlyPrices ? JSON.stringify(hourlyPrices) : null, 
+        address || '', facilities || [], courtNumber || null, latitude || null, longitude || null,
+        openTime || '00:00', closeTime || '23:59'
+      ]
     );
     res.status(201).json({ success: true, court: result.rows[0] });
   } catch (error) {
@@ -6058,12 +6071,25 @@ app.get('/api/courts/:email', async (req, res) => {
 app.put('/api/courts/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, courtNumber, duration, basePrice, hourlyPrices, description, address, facilities, latitude, longitude } = req.body;
+    const { 
+      name, duration, description, active, 
+      basePrice, hourlyPrices, address, facilities, courtNumber,
+      latitude, longitude, openTime, closeTime 
+    } = req.body;
+
     const result = await pool.query(
       `UPDATE pickle_courts 
-       SET name = $1, court_number = $2, duration = $3, base_price = $4, hourly_prices = $5, description = $6, address = $7, facilities = $8, latitude = $9, longitude = $10, updated_at = NOW()
-       WHERE id = $11 RETURNING *`,
-      [name, courtNumber || null, duration || 30, basePrice || 0, JSON.stringify(hourlyPrices || []), description || '', address || '', JSON.stringify(facilities || []), latitude || null, longitude || null, id]
+       SET name = $1, duration = $2, description = $3, active = $4, 
+           base_price = $5, hourly_prices = $6, address = $7, facilities = $8, court_number = $9,
+           latitude = $10, longitude = $11, open_time = $12, close_time = $13,
+           updated_at = NOW() 
+       WHERE id = $14 RETURNING *`,
+      [
+        name, duration || 30, description || '', active, 
+        basePrice || 0, hourlyPrices ? JSON.stringify(hourlyPrices) : null, 
+        address || '', facilities || [], courtNumber || null, latitude || null, longitude || null,
+        openTime || '00:00', closeTime || '23:59', id
+      ]
     );
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Court not found' });
