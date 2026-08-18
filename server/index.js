@@ -6493,7 +6493,7 @@ app.get('/api/open-challenges', async (req, res) => {
       LEFT JOIN pickle_challenge_requests req ON a.id = req.appointment_id AND req.status = 'accepted'
       WHERE a.is_open_challenge = true 
         AND a.preferred_date >= CURRENT_DATE 
-        AND a.status = 'confirmed'
+        AND a.status IN ('confirmed', 'queued')
       ORDER BY a.preferred_date ASC, a.preferred_time ASC
     `;
 
@@ -6565,8 +6565,8 @@ app.post('/api/challenges/accept', async (req, res) => {
     if (reqInfo.rows.length > 0) {
       const c = reqInfo.rows[0];
       await pool.query(
-        `INSERT INTO pickle_open_play_participants (appointment_id, user_email, user_name, status) VALUES ($1, $2, $3, 'approved')`,
-        [appointmentId, c.challenger_email, c.challenger_name]
+        `INSERT INTO pickle_open_play_participants (appointment_id, user_email, status) VALUES ($1, $2, 'approved')`,
+        [appointmentId, c.challenger_email]
       );
     }
     
