@@ -11,6 +11,7 @@ const path = require('path');
 const fs = require('fs');
 require('dotenv').config({ path: path.join(__dirname, '.env') });
 const { OAuth2Client } = require('google-auth-library');
+const { RtcTokenBuilder, RtcRole } = require('agora-access-token');
 const googleClient = new OAuth2Client('791853418225-nnsmvmfnabhqlevkevbp8549mccha2he.apps.googleusercontent.com');
 const axios = require('axios');
 const admin = require('firebase-admin');
@@ -5851,31 +5852,60 @@ app.post('/api/user/bookings/cancel', async (req, res) => {
   try {
     const { bookingId, email } = req.body;
     
-    // Check if the booking exists and belongs to the user
-    const { rows } = await pool.query(
+    // First check if the user is the host
+    const hostCheck = await pool.query(
       `SELECT * FROM pickle_appointment WHERE id = $1 AND email = $2`,
       [bookingId, email]
     );
 
-    if (rows.length === 0) {
-      return res.status(404).json({ success: false, message: 'Booking not found or unauthorized' });
+    if (hostCheck.rows.length > 0) {
+      const booking = hostCheck.rows[0];
+      if (booking.status === 'cancelled' || booking.status === 'completed') {
+        return res.status(400).json({ success: false, message: `Booking is already ${booking.status}` });
+      }
+
+      // Cancel the booking
+      await pool.query(
+        `UPDATE pickle_appointment SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+        [bookingId]
+      );
+
+      // Notify any matching booking assistants
+      if (typeof notifyBookingAssistants === 'function') {
+        notifyBookingAssistants(booking.service_type, booking.preferred_date, booking.preferred_time);
+      }
+
+      return res.json({ success: true, message: 'Booking cancelled successfully' });
     }
 
-    const booking = rows[0];
-    if (booking.status === 'cancelled' || booking.status === 'completed') {
-      return res.status(400).json({ success: false, message: `Booking is already ${booking.status}` });
-    }
-
-    // Cancel the booking
-    await pool.query(
-      `UPDATE pickle_appointment SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
-      [bookingId]
+    // User is not the host. Check if they are a participant (Open Play / Open Challenge)
+    const partCheck = await pool.query(
+      `SELECT * FROM pickle_open_play_participants WHERE appointment_id = $1 AND user_email = $2`,
+      [bookingId, email]
     );
 
-    // Notify any matching booking assistants
-    notifyBookingAssistants(booking.service_type, booking.preferred_date, booking.preferred_time);
+    if (partCheck.rows.length > 0) {
+      // User is a participant. Withdraw them.
+      await pool.query('BEGIN');
+      try {
+        await pool.query(
+          `DELETE FROM pickle_open_play_participants WHERE appointment_id = $1 AND user_email = $2`,
+          [bookingId, email]
+        );
+        // If it was a challenge, set their request status to withdrawn
+        await pool.query(
+          `UPDATE pickle_challenge_requests SET status = 'withdrawn' WHERE appointment_id = $1 AND challenger_email = $2`,
+          [bookingId, email]
+        );
+        await pool.query('COMMIT');
+        return res.json({ success: true, message: 'Successfully withdrawn from the activity' });
+      } catch (e) {
+        await pool.query('ROLLBACK');
+        throw e;
+      }
+    }
 
-    res.json({ success: true, message: 'Booking cancelled successfully' });
+    return res.status(404).json({ success: false, message: 'Booking not found or unauthorized' });
   } catch (err) {
     console.error('Cancel booking error:', err);
     res.status(500).json({ success: false, message: 'Failed to cancel booking' });
@@ -6573,6 +6603,37 @@ app.get('/api/challenges/:id/requests', async (req, res) => {
   }
 });
 
+// GET /api/agora/token
+app.get('/api/agora/token', (req, res) => {
+  const { channelName } = req.query;
+  if (!channelName) {
+    return res.status(400).json({ success: false, message: 'channelName is required' });
+  }
+
+  const appId = 'b1f93855c6294b249f37356fff875a2d';
+  const appCertificate = '60d16d8c1c284f3bbebc4c21d72b3b4e';
+  const uid = 0; // Using 0 means we allow Agora to auto-assign a UID
+  const role = RtcRole.PUBLISHER; // Publisher role covers both sending and receiving
+  const expirationTimeInSeconds = 3600 * 4; // 4 hours
+  const currentTimestamp = Math.floor(Date.now() / 1000);
+  const privilegeExpiredTs = currentTimestamp + expirationTimeInSeconds;
+
+  try {
+    const token = RtcTokenBuilder.buildTokenWithUid(
+      appId,
+      appCertificate,
+      channelName,
+      uid,
+      role,
+      privilegeExpiredTs
+    );
+    res.json({ success: true, token });
+  } catch (err) {
+    console.error('Error generating Agora token:', err);
+    res.status(500).json({ success: false, message: 'Failed to generate token' });
+  }
+});
+
 // POST /api/challenges/accept
 app.post('/api/challenges/accept', async (req, res) => {
   try {
@@ -6601,6 +6662,34 @@ app.post('/api/challenges/accept', async (req, res) => {
   } catch (err) {
     await pool.query('ROLLBACK');
     console.error('Error accepting challenger:', err);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// POST /api/challenges/redo
+app.post('/api/challenges/redo', async (req, res) => {
+  try {
+    const { appointmentId } = req.body;
+    
+    await pool.query('BEGIN');
+    
+    // Remove the currently accepted challenger from participants
+    await pool.query(
+      `DELETE FROM pickle_open_play_participants WHERE appointment_id = $1`, 
+      [appointmentId]
+    );
+    
+    // Reset all requests for this appointment to pending
+    await pool.query(
+      `UPDATE pickle_challenge_requests SET status = 'pending' WHERE appointment_id = $1`, 
+      [appointmentId]
+    );
+    
+    await pool.query('COMMIT');
+    res.json({ success: true, message: 'Challenge successfully reset.' });
+  } catch (err) {
+    await pool.query('ROLLBACK');
+    console.error('Error redoing challenge:', err);
     res.status(500).json({ success: false, message: 'Server error' });
   }
 });
@@ -6751,6 +6840,110 @@ app.post('/api/user/reset-password', async (req, res) => {
   } catch (error) {
     console.error('Reset password error:', error);
     res.status(500).json({ success: false, message: 'Failed to reset password' });
+  }
+});
+
+// ==================== PASALO ENDPOINTS ====================
+
+app.post('/api/appointments/:id/pasalo', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { assumePrice, assumeNotes } = req.body;
+    await pool.query(
+      'UPDATE pickle_appointment SET is_assume = true, assume_price = $1, assume_notes = $2 WHERE id = $3',
+      [assumePrice, assumeNotes, id]
+    );
+    res.json({ success: true, message: 'Posted for Pasalo successfully' });
+  } catch (error) {
+    console.error('Error posting pasalo:', error);
+    res.status(500).json({ success: false, message: 'Failed to post pasalo' });
+  }
+});
+
+app.get('/api/pasalo-courts', async (req, res) => {
+  try {
+    const query = `
+      SELECT a.id, a.full_name as current_owner_name, a.email as current_owner_email,
+             a.preferred_date, a.preferred_time, a.status, a.service_type as court_name,
+             a.assume_price, a.assume_notes,
+             u.gcash_number, u.paymaya_number, u.bank_account, u.bank_account_name
+      FROM pickle_appointment a
+      LEFT JOIN users u ON a.email = u.email
+      WHERE a.is_assume = true AND a.status NOT IN ('cancelled', 'completed', 'declined')
+      ORDER BY a.preferred_date ASC
+    `;
+    const result = await pool.query(query);
+    res.json({ success: true, pasaloCourts: result.rows });
+  } catch (error) {
+    console.error('Error fetching pasalo courts:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch pasalo courts' });
+  }
+});
+
+app.post('/api/appointments/:id/accept-pasalo', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { requesterEmail, requesterName, requesterPhone, proofOfPayment } = req.body;
+    
+    await pool.query(
+      `INSERT INTO pickle_pasalo_requests 
+       (appointment_id, requester_email, requester_name, requester_phone, proof_of_payment, status) 
+       VALUES ($1, $2, $3, $4, $5, 'pending')`,
+      [id, requesterEmail, requesterName, requesterPhone, proofOfPayment]
+    );
+    res.json({ success: true, message: 'Pasalo request sent successfully' });
+  } catch (error) {
+    console.error('Error accepting pasalo:', error);
+    res.status(500).json({ success: false, message: 'Failed to send pasalo request' });
+  }
+});
+
+app.get('/api/appointments/:id/pasalo-requests', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query(
+      'SELECT * FROM pickle_pasalo_requests WHERE appointment_id = $1 ORDER BY created_at ASC',
+      [id]
+    );
+    res.json({ success: true, requests: result.rows });
+  } catch (error) {
+    console.error('Error fetching pasalo requests:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch requests' });
+  }
+});
+
+app.post('/api/pasalo-requests/:id/approve', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Get the request
+    const reqResult = await pool.query('SELECT * FROM pickle_pasalo_requests WHERE id = $1', [id]);
+    if (reqResult.rows.length === 0) return res.status(404).json({ success: false, message: 'Request not found' });
+    
+    const request = reqResult.rows[0];
+    const appointmentId = request.appointment_id;
+
+    await pool.query('BEGIN');
+    
+    // Update request status
+    await pool.query('UPDATE pickle_pasalo_requests SET status = $1 WHERE id = $2', ['approved', id]);
+    // Reject other pending requests for this appointment
+    await pool.query('UPDATE pickle_pasalo_requests SET status = $1 WHERE appointment_id = $2 AND id != $3', ['rejected', appointmentId, id]);
+    
+    // Transfer ownership of appointment
+    await pool.query(
+      `UPDATE pickle_appointment 
+       SET email = $1, full_name = $2, phone_number = $3, is_assume = false, proof_of_payment = $4
+       WHERE id = $5`,
+      [request.requester_email, request.requester_name, request.requester_phone, request.proof_of_payment, appointmentId]
+    );
+
+    await pool.query('COMMIT');
+    res.json({ success: true, message: 'Pasalo request approved and transferred' });
+  } catch (error) {
+    await pool.query('ROLLBACK');
+    console.error('Error approving pasalo request:', error);
+    res.status(500).json({ success: false, message: 'Failed to approve request' });
   }
 });
 
