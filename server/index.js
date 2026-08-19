@@ -5545,14 +5545,24 @@ app.get('/api/user/bookings/:email', async (req, res) => {
     const { email } = req.params;
     console.log(`[GET] /api/user/bookings/${email}`);
     const { rows } = await pool.query(
-      `SELECT DISTINCT a.*, a.preferred_date as appointment_date, a.preferred_time as appointment_time, c.address as court_address, c.latitude as court_lat, c.longitude as court_lng,
+      `SELECT a.*, a.preferred_date as appointment_date, a.preferred_time as appointment_time, c.address as court_address, c.latitude as court_lat, c.longitude as court_lng,
        req.challenger_name as accepted_challenger_name
        FROM pickle_appointment a 
        LEFT JOIN pickle_courts c ON a.service_type = c.name 
-       LEFT JOIN pickle_open_play_participants p ON a.id = p.appointment_id
        LEFT JOIN pickle_challenge_requests req ON a.id = req.appointment_id AND req.status = 'accepted'
-       WHERE a.email = $1 OR (p.user_email = $1 AND p.status != 'rejected')
-       ORDER BY a.preferred_date DESC, a.preferred_time DESC`,
+       WHERE a.email = $1
+
+       UNION
+
+       SELECT a.*, a.preferred_date as appointment_date, a.preferred_time as appointment_time, c.address as court_address, c.latitude as court_lat, c.longitude as court_lng,
+       req.challenger_name as accepted_challenger_name
+       FROM pickle_appointment a 
+       LEFT JOIN pickle_courts c ON a.service_type = c.name 
+       INNER JOIN pickle_open_play_participants p ON a.id = p.appointment_id
+       LEFT JOIN pickle_challenge_requests req ON a.id = req.appointment_id AND req.status = 'accepted'
+       WHERE p.user_email = $1 AND p.status != 'rejected'
+       
+       ORDER BY appointment_date DESC, appointment_time DESC`,
       [email]
     );
     console.log(`Returned ${rows.length} bookings for ${email}.`);
