@@ -6781,14 +6781,7 @@ app.get('/api/owner-earnings/:email', async (req, res) => {
 });
 
 
-// Catch-all route for React Router (must be the LAST route)
-app.get('*', (req, res) => {
-  if (fs.existsSync(path.join(frontendDistPath, 'index.html'))) {
-    res.sendFile(path.join(frontendDistPath, 'index.html'));
-  } else {
-    res.status(404).send('Frontend build not found. Please run "npm run build" in the root directory.');
-  }
-});
+
 // ==================== FORGOT PASSWORD ====================
 app.post('/api/user/forgot-password', async (req, res) => {
   const { email } = req.body;
@@ -6954,6 +6947,15 @@ app.post('/api/pasalo-requests/:id/approve', async (req, res) => {
     await pool.query('ROLLBACK');
     console.error('Error approving pasalo request:', error);
     res.status(500).json({ success: false, message: 'Failed to approve request' });
+  }
+});
+
+// Catch-all route for React Router (must be the LAST route)
+app.get('*', (req, res) => {
+  if (fs.existsSync(path.join(frontendDistPath, 'index.html'))) {
+    res.sendFile(path.join(frontendDistPath, 'index.html'));
+  } else {
+    res.status(404).send('Frontend build not found. Please run "npm run build" in the root directory.');
   }
 });
 
