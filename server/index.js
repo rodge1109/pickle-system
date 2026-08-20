@@ -6869,9 +6869,11 @@ app.get('/api/pasalo-courts', async (req, res) => {
       SELECT a.id, a.full_name as current_owner_name, a.email as current_owner_email,
              a.preferred_date, a.preferred_time, a.status, a.service_type as court_name,
              a.assume_price, a.assume_notes,
-             u.gcash_number, u.paymaya_number, u.bank_account, u.bank_account_name
+             u.gcash_number, u.paymaya_number, u.bank_account, u.bank_account_name,
+             c.address as court_address
       FROM pickle_appointment a
       LEFT JOIN users u ON a.email = u.email
+      LEFT JOIN pickle_courts c ON a.service_type = c.name
       WHERE a.is_assume = true 
         AND a.status NOT IN ('cancelled', 'completed', 'declined')
         AND NOT EXISTS (
