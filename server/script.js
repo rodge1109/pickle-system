@@ -1,0 +1,1 @@
+const { Pool } = require('pg'); const pool = new Pool({ connectionString: 'postgres://postgres.zhtyktlktykotyzhxyps:Ch3l3l3t110977@aws-1-ap-northeast-2.pooler.supabase.com:5432/postgres' }); pool.query('SELECT column_name, data_type FROM information_schema.columns WHERE table_name = ''pickle_pasalo_requests''').then(res => { console.log(res.rows); pool.end(); });

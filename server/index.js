@@ -6872,7 +6872,12 @@ app.get('/api/pasalo-courts', async (req, res) => {
              u.gcash_number, u.paymaya_number, u.bank_account, u.bank_account_name
       FROM pickle_appointment a
       LEFT JOIN users u ON a.email = u.email
-      WHERE a.is_assume = true AND a.status NOT IN ('cancelled', 'completed', 'declined')
+      WHERE a.is_assume = true 
+        AND a.status NOT IN ('cancelled', 'completed', 'declined')
+        AND NOT EXISTS (
+          SELECT 1 FROM pickle_pasalo_requests r 
+          WHERE r.appointment_id = a.id AND r.status IN ('accepted', 'payment_sent')
+        )
       ORDER BY a.preferred_date ASC
     `;
     const result = await pool.query(query);
@@ -6894,11 +6899,17 @@ app.post('/api/appointments/:id/accept-pasalo', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Sorry, this court has already been transferred or is no longer available.' });
     }
 
+    // Safety check: ensure there is no accepted/payment_sent request already
+    const checkReq = await pool.query("SELECT 1 FROM pickle_pasalo_requests WHERE appointment_id = $1 AND status IN ('accepted', 'payment_sent')", [id]);
+    if (checkReq.rows.length > 0) {
+      return res.status(400).json({ success: false, message: 'Sorry, this court is currently pending payment by another player.' });
+    }
+
     await pool.query(
       `INSERT INTO pickle_pasalo_requests 
        (appointment_id, requester_email, requester_name, requester_phone, proof_of_payment, status) 
        VALUES ($1, $2, $3, $4, $5, 'pending')`,
-      [id, requesterEmail, requesterName, requesterPhone, proofOfPayment]
+      [id, requesterEmail, requesterName, requesterPhone, proofOfPayment || null]
     );
     res.json({ success: true, message: 'Pasalo request sent successfully' });
   } catch (error) {
@@ -6917,7 +6928,62 @@ app.get('/api/appointments/:id/pasalo-requests', async (req, res) => {
     res.json({ success: true, requests: result.rows });
   } catch (error) {
     console.error('Error fetching pasalo requests:', error);
-    res.status(500).json({ success: false, message: 'Failed to fetch requests' });
+    res.status(500).json({ success: false, message: 'Failed to fetch pasalo requests' });
+  }
+});
+
+// Fetch outgoing pasalo requests for a user
+app.get('/api/user/pasalo-requests/:email', async (req, res) => {
+  try {
+    const { email } = req.params;
+    const query = `
+      SELECT r.*, a.service_type as court_name, a.preferred_date, a.preferred_time, a.assume_price,
+             u.full_name as owner_name, u.gcash_number, u.paymaya_number, u.bank_account, u.bank_account_name
+      FROM pickle_pasalo_requests r
+      JOIN pickle_appointment a ON r.appointment_id = a.id
+      JOIN users u ON a.email = u.email
+      WHERE r.requester_email = $1
+      ORDER BY r.created_at DESC
+    `;
+    const result = await pool.query(query, [email]);
+    res.json({ success: true, requests: result.rows });
+  } catch (error) {
+    console.error('Error fetching outgoing pasalo requests:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+app.post('/api/pasalo-requests/:id/accept', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query('UPDATE pickle_pasalo_requests SET status = $1 WHERE id = $2', ['accepted', id]);
+    res.json({ success: true, message: 'Request accepted, waiting for payment' });
+  } catch (error) {
+    console.error('Error accepting pasalo request:', error);
+    res.status(500).json({ success: false, message: 'Failed to accept request' });
+  }
+});
+
+app.post('/api/pasalo-requests/:id/cancel-acceptance', async (req, res) => {
+  try {
+    const { id } = req.params;
+    await pool.query('UPDATE pickle_pasalo_requests SET status = $1 WHERE id = $2', ['cancelled', id]);
+    res.json({ success: true, message: 'Acceptance cancelled' });
+  } catch (error) {
+    console.error('Error cancelling pasalo request:', error);
+    res.status(500).json({ success: false, message: 'Failed to cancel request' });
+  }
+});
+
+app.post('/api/pasalo-requests/:id/upload-payment', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { proofOfPayment } = req.body;
+    await pool.query('UPDATE pickle_pasalo_requests SET status = $1, proof_of_payment = $2 WHERE id = $3', ['payment_sent', proofOfPayment, id]);
+    res.json({ success: true, message: 'Payment uploaded successfully' });
+  } catch (error) {
+    console.error('Error uploading payment for pasalo:', error);
+    res.status(500).json({ success: false, message: 'Failed to upload payment' });
   }
 });
 
@@ -6935,7 +7001,7 @@ app.post('/api/pasalo-requests/:id/approve', async (req, res) => {
     await pool.query('BEGIN');
     
     // Update request status
-    await pool.query('UPDATE pickle_pasalo_requests SET status = $1 WHERE id = $2', ['approved', id]);
+    await pool.query('UPDATE pickle_pasalo_requests SET status = $1 WHERE id = $2', ['completed', id]);
     // Reject other pending requests for this appointment
     await pool.query('UPDATE pickle_pasalo_requests SET status = $1 WHERE appointment_id = $2 AND id != $3', ['rejected', appointmentId, id]);
     
