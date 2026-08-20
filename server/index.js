@@ -6888,6 +6888,12 @@ app.post('/api/appointments/:id/accept-pasalo', async (req, res) => {
     const { id } = req.params;
     const { requesterEmail, requesterName, requesterPhone, proofOfPayment } = req.body;
     
+    // Safety check: ensure court is still available for pasalo
+    const checkResult = await pool.query('SELECT is_assume FROM pickle_appointment WHERE id = $1', [id]);
+    if (checkResult.rows.length === 0 || checkResult.rows[0].is_assume !== true) {
+      return res.status(400).json({ success: false, message: 'Sorry, this court has already been transferred or is no longer available.' });
+    }
+
     await pool.query(
       `INSERT INTO pickle_pasalo_requests 
        (appointment_id, requester_email, requester_name, requester_phone, proof_of_payment, status) 
