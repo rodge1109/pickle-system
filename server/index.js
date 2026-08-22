@@ -92,6 +92,55 @@ const UPLOADS_DIR = path.join(__dirname, 'uploads');
 if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR);
 app.use('/uploads', express.static(UPLOADS_DIR));
 
+// Privacy Policy Route for Google Play
+app.get('/privacy', (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Privacy Policy - PickleBook App</title>
+      <style>
+        body { font-family: sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; line-height: 1.6; }
+        h1 { color: #333; }
+        h2 { color: #555; }
+      </style>
+    </head>
+    <body>
+      <h1>Privacy Policy</h1>
+      <p>Last updated: ${new Date().toLocaleDateString()}</p>
+      <p>Thank you for choosing to be part of our community at PickleBook App. We are committed to protecting your personal information and your right to privacy.</p>
+      
+      <h2>1. Information We Collect</h2>
+      <p>We collect personal information that you voluntarily provide to us when you register on the app, express an interest in obtaining information about us or our products and services, or otherwise contact us. The personal information that we collect depends on the context of your interactions with us and the app, the choices you make and the products and features you use. The personal information we collect may include the following:</p>
+      <ul>
+        <li>Names</li>
+        <li>Phone numbers</li>
+        <li>Email addresses</li>
+        <li>Passwords</li>
+        <li>Financial data (like GCash, PayMaya, or Bank Account numbers for Court Owners)</li>
+      </ul>
+
+      <h2>2. How We Use Your Information</h2>
+      <p>We use personal information collected via our app for a variety of business purposes described below. We process your personal information for these purposes in reliance on our legitimate business interests, in order to enter into or perform a contract with you, with your consent, and/or for compliance with our legal obligations.</p>
+      <ul>
+        <li>To facilitate account creation and logon process.</li>
+        <li>To manage user accounts.</li>
+        <li>To fulfill and manage your bookings and payments.</li>
+      </ul>
+
+      <h2>3. Sharing Your Information</h2>
+      <p>We only share information with your consent, to comply with laws, to provide you with services, to protect your rights, or to fulfill business obligations. For example, some of your information may be shared with Court Owners when you book a court.</p>
+
+      <h2>4. Data Retention and Security</h2>
+      <p>We will only keep your personal information for as long as it is necessary for the purposes set out in this privacy notice, unless a longer retention period is required or permitted by law. We have implemented appropriate technical and organizational security measures designed to protect the security of any personal information we process.</p>
+
+      <h2>5. Contact Us</h2>
+      <p>If you have questions or comments about this notice, you may email us at our provided contact email in the app.</p>
+    </body>
+    </html>
+  `);
+});
+
 // Upload endpoint
 app.post('/api/staff/upload', (req, res) => {
   upload.single('file')(req, res, (err) => {
