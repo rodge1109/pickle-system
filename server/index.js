@@ -623,6 +623,66 @@ const sendConfirmationEmail = async (appointment) => {
   }
 };
 
+// Clean up expired holds every minute
+cron.schedule('* * * * *', async () => {
+  try {
+    const res = await pool.query(`DELETE FROM pickle_appointment WHERE status = 'held' AND created_at < NOW() - INTERVAL '5 minutes'`);
+    if (res.rowCount > 0) {
+      console.log(`Cleaned up ${res.rowCount} expired held slots.`);
+    }
+  } catch (error) {
+    console.error('Error cleaning up held slots:', error);
+  }
+});
+
+// Hold an appointment slot
+app.post('/api/appointments/hold', async (req, res) => {
+  try {
+    const { preferredDate, preferredTimes, serviceType, email } = req.body;
+    
+    if (!preferredDate || !preferredTimes || !preferredTimes.length || !serviceType) {
+      return res.status(400).json({ success: false, message: 'Missing required fields' });
+    }
+
+    // Check for overlap for each time
+    for (const time of preferredTimes) {
+      const overlapCheck = await pool.query(
+        `SELECT * FROM pickle_appointment
+         WHERE preferred_date::date = $1::date
+         AND preferred_time = $2
+         AND (
+           LOWER(service_type) = LOWER($3) 
+           OR $3 ILIKE '%' || service_type || '%' 
+           OR service_type ILIKE '%' || $3 || '%'
+           OR LOWER(REGEXP_REPLACE(service_type, '[^a-zA-Z0-9]', '', 'g')) = LOWER(REGEXP_REPLACE($3, '[^a-zA-Z0-9]', '', 'g'))
+         )
+         AND status != 'cancelled'`,
+        [preferredDate, time, serviceType]
+      );
+      if (overlapCheck.rows.length > 0) {
+        return res.status(409).json({ success: false, message: `Time slot ${time} is already booked or held.` });
+      }
+    }
+
+    const holdToken = Math.random().toString(36).substring(2) + Date.now().toString(36);
+
+    for (const time of preferredTimes) {
+      await pool.query(
+        `INSERT INTO pickle_appointment (
+          preferred_date, preferred_time, service_type, email, status, cancel_token, 
+          full_name, phone_number, payment_method, total_amount, created_at
+        ) VALUES ($1, $2, $3, $4, 'held', $5, '', '', '', 0, NOW())`,
+        [preferredDate, time, serviceType, email || '', holdToken]
+      );
+    }
+
+    res.json({ success: true, holdToken });
+  } catch (err) {
+    console.error('Hold slot error:', err);
+    res.status(500).json({ success: false, message: 'Server error holding slot' });
+  }
+});
+
 // Create a new appointment
 app.post('/api/appointments', async (req, res) => {
   try {
@@ -655,7 +715,8 @@ app.post('/api/appointments', async (req, res) => {
       isOpenChallenge,
       challengeType,
       hostTandemName,
-      challengeDescription
+      challengeDescription,
+      holdToken
     } = req.body;
 
     // Validate required fields
@@ -691,8 +752,7 @@ app.post('/api/appointments', async (req, res) => {
     }
 
     // Check for overlapping appointments (same date, time, and service type)
-    const overlapCheck = await pool.query(
-      `SELECT * FROM pickle_appointment
+    let overlapQuery = `SELECT * FROM pickle_appointment
        WHERE preferred_date::date = $1::date
        AND preferred_time = $2
        AND (
@@ -701,9 +761,16 @@ app.post('/api/appointments', async (req, res) => {
          OR service_type ILIKE '%' || $3 || '%'
          OR LOWER(REGEXP_REPLACE(service_type, '[^a-zA-Z0-9]', '', 'g')) = LOWER(REGEXP_REPLACE($3, '[^a-zA-Z0-9]', '', 'g'))
        )
-       AND status != 'cancelled'`,
-      [preferredDate, preferredTime, serviceType]
-    );
+       AND status != 'cancelled'`;
+       
+    let overlapParams = [preferredDate, preferredTime, serviceType];
+    
+    if (holdToken) {
+        overlapQuery += ` AND cancel_token != $4`;
+        overlapParams.push(holdToken);
+    }
+    
+    const overlapCheck = await pool.query(overlapQuery, overlapParams);
 
     if (overlapCheck.rows.length > 0 && agentCode !== 'DISPATCHER') {
       return res.status(409).json({
@@ -785,6 +852,14 @@ app.post('/api/appointments', async (req, res) => {
       challengeDescription || null
     ];
     const result = await pool.query(query, values);
+
+    if (holdToken) {
+       // Delete the held slot to prevent duplicates, since we just inserted the actual one
+       await pool.query(
+          `DELETE FROM pickle_appointment WHERE cancel_token = $1 AND preferred_time = $2 AND status = 'held'`, 
+          [holdToken, preferredTime]
+       );
+    }
 
     // Send confirmation email and SMS (don't wait for it, don't fail if it fails)
     const appointment = result.rows[0];
