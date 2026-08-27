@@ -6185,7 +6185,7 @@ app.post('/api/courts', async (req, res) => {
       [
         name, ownerEmail, duration || 30, description || '', 
         basePrice || 0, hourlyPrices ? JSON.stringify(hourlyPrices) : null, 
-        address || '', facilities || [], courtNumber || null, latitude || null, longitude || null,
+        address || '', facilities ? JSON.stringify(facilities) : '[]', courtNumber || null, latitude || null, longitude || null,
         openTime || '00:00', closeTime || '23:59'
       ]
     );
@@ -6251,7 +6251,7 @@ app.put('/api/courts/:id', async (req, res) => {
       [
         name, duration || 30, description || '', active, 
         basePrice || 0, hourlyPrices ? JSON.stringify(hourlyPrices) : null, 
-        address || '', facilities || [], courtNumber || null, latitude || null, longitude || null,
+        address || '', facilities ? JSON.stringify(facilities) : '[]', courtNumber || null, latitude || null, longitude || null,
         openTime || '00:00', closeTime || '23:59', id
       ]
     );
