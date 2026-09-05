@@ -6170,6 +6170,8 @@ app.post('/api/owner/appointments/cancel', async (req, res) => {
 
 // ==================== PICKLE COURTS API ====================
 
+pool.query('ALTER TABLE pickle_courts ADD COLUMN IF NOT EXISTS logo_url TEXT').catch(() => {});
+
 app.post('/api/courts', async (req, res) => {
   try {
     const { 
@@ -6180,8 +6182,8 @@ app.post('/api/courts', async (req, res) => {
     
     const result = await pool.query(
       `INSERT INTO pickle_courts 
-        (name, owner_email, duration, description, active, base_price, hourly_prices, address, facilities, court_number, latitude, longitude, open_time, close_time) 
-       VALUES ($1, $2, $3, $4, true, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *`,
+        (name, owner_email, duration, description, active, base_price, hourly_prices, address, facilities, court_number, latitude, longitude, open_time, close_time, logo_url) 
+       VALUES ($1, $2, $3, $4, true, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *`,
       [
         name, ownerEmail, duration || 30, description || '', 
         basePrice || 0, hourlyPrices ? JSON.stringify(hourlyPrices) : null, 
