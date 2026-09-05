@@ -6171,6 +6171,10 @@ app.post('/api/owner/appointments/cancel', async (req, res) => {
 // ==================== PICKLE COURTS API ====================
 
 pool.query('ALTER TABLE pickle_courts ADD COLUMN IF NOT EXISTS logo_url TEXT').catch(() => {});
+pool.query('ALTER TABLE pickle_courts ADD COLUMN IF NOT EXISTS day_discount_rate NUMERIC').catch(() => {});
+pool.query('ALTER TABLE pickle_courts ADD COLUMN IF NOT EXISTS is_day_discount_active BOOLEAN DEFAULT false').catch(() => {});
+pool.query('ALTER TABLE pickle_courts ADD COLUMN IF NOT EXISTS night_discount_rate NUMERIC').catch(() => {});
+pool.query('ALTER TABLE pickle_courts ADD COLUMN IF NOT EXISTS is_night_discount_active BOOLEAN DEFAULT false').catch(() => {});
 
 app.post('/api/courts', async (req, res) => {
   try {
@@ -6182,8 +6186,8 @@ app.post('/api/courts', async (req, res) => {
     
     const result = await pool.query(
       `INSERT INTO pickle_courts 
-        (name, owner_email, duration, description, active, base_price, hourly_prices, address, facilities, court_number, latitude, longitude, open_time, close_time, logo_url) 
-       VALUES ($1, $2, $3, $4, true, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) RETURNING *`,
+        (name, owner_email, duration, description, active, base_price, hourly_prices, address, facilities, court_number, latitude, longitude, open_time, close_time, logo_url, day_discount_rate, is_day_discount_active, night_discount_rate, is_night_discount_active) 
+       VALUES ($1, $2, $3, $4, true, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) RETURNING *`,
       [
         name, ownerEmail, duration || 30, description || '', 
         basePrice || 0, hourlyPrices ? JSON.stringify(hourlyPrices) : null, 
