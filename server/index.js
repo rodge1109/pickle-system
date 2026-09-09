@@ -3446,8 +3446,6 @@ app.delete('/api/specialists/:id', async (req, res) => {
 
 app.get('/api/booking-services', async (_req, res) => {
   try {
-    const { rows: legacyServices } = await pool.query('SELECT * FROM booking_services ORDER BY category, name ASC');
-    
     // Fetch owner courts and join with user table to get payment info
     const { rows: pickleCourts } = await pool.query(`
       SELECT p.*, 
@@ -3462,17 +3460,14 @@ app.get('/api/booking-services', async (_req, res) => {
     
     // Map pickleCourts to match ServiceModel structure and attach Cloudinary icons if available
     const mappedCourts = pickleCourts.map(c => {
-      const legacyMatch = legacyServices.find(l => l.name.toLowerCase() === c.name.toLowerCase());
-      const iconUrl = (legacyMatch && legacyMatch.icon && legacyMatch.icon.startsWith('http')) 
-          ? legacyMatch.icon 
-          : (c.icon && c.icon.startsWith('http') ? c.icon : '🎾');
+      const iconUrl = (c.icon && c.icon.startsWith('http') ? c.icon : 'dYZ_');
 
       return {
-        id: c.id + 100000, // Offset ID to avoid collision with legacy services
+        id: c.id, // No longer need to offset ID
         name: c.name,
         description: c.description || '',
-        price: c.base_price ? `PHP ${parseFloat(c.base_price).toFixed(0)}` : (legacyMatch ? legacyMatch.price : 'PHP 300'),
-        address: c.address || (legacyMatch ? legacyMatch.court_address : '') || 'Cayang, Bogo',
+        price: c.base_price ? `PHP ${parseFloat(c.base_price).toFixed(0)}` : 'PHP 300',
+        address: c.address || 'Cayang, Bogo',
         facilities: c.facilities || [],
         icon: iconUrl,
         duration: c.duration,
@@ -3492,10 +3487,7 @@ app.get('/api/booking-services', async (_req, res) => {
       };
     });
     
-    // Remove legacyServices that have the exact same name as a mapped pickle_court to avoid duplicate display
-    const uniqueLegacy = legacyServices.filter(l => !pickleCourts.some(c => c.name.toLowerCase() === l.name.toLowerCase()));
-
-    res.json({ success: true, services: [...mappedCourts, ...uniqueLegacy] });
+    res.json({ success: true, services: mappedCourts });
   } catch (error) {
     console.error('Error fetching services:', error);
     res.status(500).json({ success: false, message: 'Failed to fetch services' });
