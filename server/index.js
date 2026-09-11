@@ -3483,7 +3483,10 @@ app.get('/api/booking-services', async (_req, res) => {
           bank_account_name: c.bank_account_name
         },
         open_time: c.open_time || '00:00',
-        close_time: c.close_time || '23:59'
+        close_time: c.close_time || '23:59',
+        about_venue: c.about_venue || '',
+        booking_policy: c.booking_policy || '',
+        faq: c.faq || ''
       };
     });
     
