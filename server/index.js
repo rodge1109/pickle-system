@@ -873,6 +873,24 @@ app.post('/api/appointments', async (req, res) => {
       );
       const ownerEmail = courtOwnerResult.rows.length > 0 ? courtOwnerResult.rows[0].owner_email : 'rodge1109@yahoo.com';
 
+      // Automatically register/update Customer in Member Loyalty Directory & add loyalty stamp
+      try {
+        await pool.query(
+          `INSERT INTO pickle_customer (owner_email, full_name, email, phone, is_member, stamp_count, total_bookings, updated_at)
+           VALUES ($1, $2, LOWER($3), $4, true, 1, 1, CURRENT_TIMESTAMP)
+           ON CONFLICT (owner_email, email) DO UPDATE
+           SET full_name = EXCLUDED.full_name,
+               phone = COALESCE(EXCLUDED.phone, pickle_customer.phone),
+               stamp_count = CASE WHEN pickle_customer.stamp_count >= 9 THEN 0 ELSE pickle_customer.stamp_count + 1 END,
+               total_bookings = pickle_customer.total_bookings + 1,
+               updated_at = CURRENT_TIMESTAMP`,
+          [ownerEmail.trim(), fullName.trim(), email.trim().toLowerCase(), phoneNumber ? phoneNumber.trim() : null]
+        );
+      } catch (custErr) {
+        console.error('Error auto-registering customer loyalty:', custErr);
+      }
+
+
       await pool.query(
         `INSERT INTO pickle_notifications (user_email, sender_email, title, message)
          VALUES ($1, $2, $3, $4)`,
