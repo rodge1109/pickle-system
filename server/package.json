@@ -4,7 +4,7 @@
   "description": "Backend server for clinic booking system",
   "main": "index.js",
   "scripts": {
-    "start": "node --max-old-space-size=256 index.js",
+    "start": "node --max-old-space-size=460 index.js",
     "dev": "node --watch index.js"
   },
   "dependencies": {
