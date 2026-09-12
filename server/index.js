@@ -6365,7 +6365,7 @@ app.put('/api/courts/:id', async (req, res) => {
       [
         name, duration || 30, description || '', active !== undefined ? active : true, 
         basePrice || 0, hourlyPrices ? JSON.stringify(hourlyPrices) : null, 
-        address || '', facilities ? JSON.stringify(facilities) : '[]', courtNumber || null, latitude || null, longitude || null,
+        address || '', (facilities !== undefined && facilities !== null) ? (typeof facilities === 'string' ? facilities : JSON.stringify(facilities)) : '[]', courtNumber || null, latitude || null, longitude || null,
         openTime || '00:00', closeTime || '23:59',
         finalVenueName, logoUrl || null, JSON.stringify(finalImages),
         dayDiscountRate || 0, isDayDiscountActive || false,
