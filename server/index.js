@@ -6188,6 +6188,10 @@ pool.query('ALTER TABLE pickle_courts ADD COLUMN IF NOT EXISTS day_discount_rate
 pool.query('ALTER TABLE pickle_courts ADD COLUMN IF NOT EXISTS is_day_discount_active BOOLEAN DEFAULT false').catch(() => {});
 pool.query('ALTER TABLE pickle_courts ADD COLUMN IF NOT EXISTS night_discount_rate NUMERIC').catch(() => {});
 pool.query('ALTER TABLE pickle_courts ADD COLUMN IF NOT EXISTS is_night_discount_active BOOLEAN DEFAULT false').catch(() => {});
+
+pool.query('ALTER TABLE pickle_courts ADD COLUMN IF NOT EXISTS day_start_hour INT DEFAULT 6').catch(() => {});
+pool.query('ALTER TABLE pickle_courts ADD COLUMN IF NOT EXISTS night_start_hour INT DEFAULT 18').catch(() => {});
+
 pool.query('ALTER TABLE pickle_courts ADD COLUMN IF NOT EXISTS booking_policy TEXT').catch(() => {});
 pool.query('ALTER TABLE pickle_courts ADD COLUMN IF NOT EXISTS about_venue TEXT').catch(() => {});
 pool.query('ALTER TABLE pickle_courts ADD COLUMN IF NOT EXISTS faq TEXT').catch(() => {});
