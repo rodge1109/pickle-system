@@ -1,3 +1,20 @@
+
+function parseFacilitiesHelper(fac) {
+  if (!fac) return [];
+  if (Array.isArray(fac)) return fac;
+  if (typeof fac === 'string') {
+    try {
+      const parsed = JSON.parse(fac);
+      if (Array.isArray(parsed)) return parsed;
+      if (fac.includes(',')) return fac.split(',').map(s => s.trim()).filter(Boolean);
+      return [fac.trim()];
+    } catch (_) {
+      if (fac.includes(',')) return fac.split(',').map(s => s.trim()).filter(Boolean);
+      return [fac.trim()];
+    }
+  }
+  return [];
+}
 const express = require('express');
 const cron = require('node-cron');
 const http = require('http');
@@ -3490,7 +3507,7 @@ app.get('/api/booking-services', async (_req, res) => {
         description: c.description || '',
         price: c.base_price ? `PHP ${parseFloat(c.base_price).toFixed(0)}` : 'PHP 300',
         address: c.address || 'Cayang, Bogo',
-        facilities: c.facilities || [],
+        facilities: parseFacilitiesHelper(c.facilities),
         icon: iconUrl,
         duration: c.duration,
         category: 'Pickleball Court',
@@ -6303,7 +6320,11 @@ app.get('/api/courts/:email', async (req, res) => {
       'SELECT * FROM pickle_courts WHERE owner_email = $1 ORDER BY created_at DESC',
       [email]
     );
-    res.json({ success: true, courts: result.rows });
+    const mappedCourts = result.rows.map(c => ({
+      ...c,
+      facilities: parseFacilitiesHelper(c.facilities)
+    }));
+    res.json({ success: true, courts: mappedCourts });
   } catch (error) {
     console.error('Error fetching courts:', error);
     res.status(500).json({ success: false, message: 'Failed to fetch courts' });
