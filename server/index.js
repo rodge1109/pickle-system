@@ -6276,7 +6276,7 @@ night_discount_rate, is_night_discount_active, booking_policy, about_venue, faq,
       [
         name, ownerEmail, duration || 30, description || '', 
         basePrice || 0, hourlyPrices ? JSON.stringify(hourlyPrices) : null, 
-        address || '', facilities ? JSON.stringify(facilities) : '[]', courtNumber || null, latitude || null, longitude || null,
+        address || '', facilities !== undefined ? (typeof facilities === 'string' ? facilities : JSON.stringify(facilities)) : '[]', courtNumber || null, latitude || null, longitude || null,
         openTime || '00:00', closeTime || '23:59',
         finalVenueName, logoUrl || null, JSON.stringify(finalImages),
         dayDiscountRate || 0, isDayDiscountActive || false,
@@ -6378,7 +6378,13 @@ app.put('/api/courts/:id', async (req, res) => {
     if (result.rows.length === 0) {
       return res.status(404).json({ success: false, message: 'Court not found' });
     }
-    res.json({ success: true, court: result.rows[0] });
+    res.json({
+      success: true,
+      court: {
+        ...result.rows[0],
+        facilities: parseFacilitiesHelper(result.rows[0].facilities)
+      }
+    });
   } catch (error) {
     console.error('Error updating court:', error);
     if (error.code === '23505') {
