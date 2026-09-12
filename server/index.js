@@ -3470,7 +3470,9 @@ app.get('/api/booking-services', async (_req, res) => {
         u.gcash_number, 
         u.paymaya_number, 
         u.bank_account, 
-        u.bank_account_name 
+        u.bank_account_name,
+        u.qr_code_url,
+        u.payment_instructions
       FROM pickle_courts p
       LEFT JOIN users u ON p.owner_email = u.email
       WHERE p.active = true
@@ -3499,10 +3501,13 @@ app.get('/api/booking-services', async (_req, res) => {
         latitude: c.latitude,
         longitude: c.longitude,
         owner_payment: {
-          gcash_number: c.gcash_number,
-          paymaya_number: c.paymaya_number,
-          bank_account: c.bank_account,
-          bank_account_name: c.bank_account_name
+          gcash_number: c.gcash_number || c.owner_payment?.gcash_number,
+          paymaya_number: c.paymaya_number || c.owner_payment?.paymaya_number,
+          bank_account: c.bank_account || c.owner_payment?.bank_account,
+          bank_account_name: c.bank_account_name || c.owner_payment?.bank_account_name,
+          qr_code_url: c.qr_code_url || c.owner_payment?.qr_code_url || c.owner_payment?.payment_qr_url,
+          payment_qr_url: c.qr_code_url || c.owner_payment?.qr_code_url || c.owner_payment?.payment_qr_url,
+          payment_instructions: c.payment_instructions || c.owner_payment?.payment_instructions
         },
         open_time: c.open_time || '00:00',
         close_time: c.close_time || '23:59',
@@ -5660,15 +5665,32 @@ app.post('/api/auth/facebook', async (req, res) => {
 app.put('/api/user/profile/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const { full_name, email, phone_number, gcash_number, paymaya_number, bank_account, bank_account_name } = req.body;
-    
+    const { full_name, email, phone_number, gcash_number, paymaya_number, bank_account, bank_account_name, qr_code_url, payment_qr_url, payment_instructions } = req.body;
+    const finalQrUrl = qr_code_url || payment_qr_url || '';
+    const finalInstructions = payment_instructions || '';
+
     const { rows } = await pool.query(
       `UPDATE users 
-       SET full_name = $1, email = $2, phone_number = $3, gcash_number = $4, paymaya_number = $5, bank_account = $6, bank_account_name = $7
-       WHERE id = $8
-       RETURNING id, full_name, email, phone_number, role, gcash_number, paymaya_number, bank_account, bank_account_name`,
-      [full_name, email, phone_number, gcash_number, paymaya_number, bank_account, bank_account_name, id]
+       SET full_name = $1, email = $2, phone_number = $3, gcash_number = $4, paymaya_number = $5, bank_account = $6, bank_account_name = $7, qr_code_url = $8, payment_instructions = $9
+       WHERE id = $10
+       RETURNING id, full_name, email, phone_number, role, gcash_number, paymaya_number, bank_account, bank_account_name, qr_code_url, payment_instructions`,
+      [full_name, email, phone_number, gcash_number, paymaya_number, bank_account, bank_account_name, finalQrUrl, finalInstructions, id]
     );
+
+    if (email) {
+      await pool.query(
+        `UPDATE pickle_courts SET owner_payment = jsonb_build_object(
+          'gcash_number', $1::text,
+          'paymaya_number', $2::text,
+          'bank_account', $3::text,
+          'bank_account_name', $4::text,
+          'qr_code_url', $5::text,
+          'payment_qr_url', $5::text,
+          'payment_instructions', $6::text
+        ) WHERE owner_email = $7`,
+        [gcash_number || '', paymaya_number || '', bank_account || '', bank_account_name || '', finalQrUrl, finalInstructions, email]
+      ).catch(() => {});
+    }
     
     if (rows.length === 0) {
       return res.status(404).json({ success: false, message: 'User not found' });
@@ -6195,6 +6217,10 @@ pool.query('ALTER TABLE pickle_courts ADD COLUMN IF NOT EXISTS is_night_discount
 
 pool.query('ALTER TABLE pickle_courts ADD COLUMN IF NOT EXISTS day_start_hour INT DEFAULT 6').catch(() => {});
 pool.query('ALTER TABLE pickle_courts ADD COLUMN IF NOT EXISTS night_start_hour INT DEFAULT 18').catch(() => {});
+
+pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS qr_code_url TEXT').catch(() => {});
+pool.query('ALTER TABLE users ADD COLUMN IF NOT EXISTS payment_instructions TEXT').catch(() => {});
+
 
 pool.query('ALTER TABLE pickle_courts ADD COLUMN IF NOT EXISTS booking_policy TEXT').catch(() => {});
 pool.query('ALTER TABLE pickle_courts ADD COLUMN IF NOT EXISTS about_venue TEXT').catch(() => {});
