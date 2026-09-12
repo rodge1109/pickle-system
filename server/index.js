@@ -7179,6 +7179,138 @@ app.post('/api/pasalo-requests/:id/approve', async (req, res) => {
   }
 });
 
+
+// --- MEMBER LOYALTY & CUSTOMER MANAGEMENT ENDPOINTS ---
+
+app.get('/api/owner/customers', async (req, res) => {
+  try {
+    const ownerEmail = req.query.owner_email;
+    if (!ownerEmail) {
+      return res.status(400).json({ success: false, message: 'owner_email is required' });
+    }
+    const result = await pool.query(
+      'SELECT * FROM pickle_customer WHERE LOWER(owner_email) = LOWER($1) ORDER BY created_at DESC',
+      [ownerEmail]
+    );
+    res.json({ success: true, customers: result.rows });
+  } catch (error) {
+    console.error('Error fetching owner customers:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+app.post('/api/owner/customers', async (req, res) => {
+  try {
+    const { owner_email, full_name, email, phone, is_member } = req.body;
+    if (!owner_email || !full_name || !email) {
+      return res.status(400).json({ success: false, message: 'owner_email, full_name, and email are required' });
+    }
+    const result = await pool.query(
+      `INSERT INTO pickle_customer (owner_email, full_name, email, phone, is_member, updated_at)
+       VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
+       ON CONFLICT (owner_email, email) DO UPDATE
+       SET full_name = EXCLUDED.full_name,
+           phone = EXCLUDED.phone,
+           is_member = EXCLUDED.is_member,
+           updated_at = CURRENT_TIMESTAMP
+       RETURNING *`,
+      [owner_email.trim(), full_name.trim(), email.trim().toLowerCase(), phone ? phone.trim() : null, is_member !== false]
+    );
+    res.json({ success: true, customer: result.rows[0] });
+  } catch (error) {
+    console.error('Error saving owner customer:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+app.delete('/api/owner/customers/:id', async (req, res) => {
+  try {
+    const customerId = req.params.id;
+    await pool.query('DELETE FROM pickle_customer WHERE id = $1', [customerId]);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error deleting customer:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+app.get('/api/owner/loyalty-settings', async (req, res) => {
+  try {
+    const ownerEmail = req.query.owner_email;
+    if (!ownerEmail) {
+      return res.status(400).json({ success: false, message: 'owner_email is required' });
+    }
+    const result = await pool.query(
+      'SELECT * FROM pickle_loyalty_settings WHERE LOWER(owner_email) = LOWER($1)',
+      [ownerEmail]
+    );
+    if (result.rows.length > 0) {
+      res.json({ success: true, settings: result.rows[0] });
+    } else {
+      res.json({
+        success: true,
+        settings: {
+          owner_email: ownerEmail,
+          member_discount_type: 'PERCENTAGE',
+          member_discount_value: 15.0,
+          milestone_target: 10,
+          free_reward_enabled: true
+        }
+      });
+    }
+  } catch (error) {
+    console.error('Error fetching loyalty settings:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+app.post('/api/owner/loyalty-settings', async (req, res) => {
+  try {
+    const { owner_email, member_discount_type, member_discount_value, milestone_target, free_reward_enabled } = req.body;
+    if (!owner_email) {
+      return res.status(400).json({ success: false, message: 'owner_email is required' });
+    }
+    const result = await pool.query(
+      `INSERT INTO pickle_loyalty_settings (owner_email, member_discount_type, member_discount_value, milestone_target, free_reward_enabled, updated_at)
+       VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)
+       ON CONFLICT (owner_email) DO UPDATE
+       SET member_discount_type = EXCLUDED.member_discount_type,
+           member_discount_value = EXCLUDED.member_discount_value,
+           milestone_target = EXCLUDED.milestone_target,
+           free_reward_enabled = EXCLUDED.free_reward_enabled,
+           updated_at = CURRENT_TIMESTAMP
+       RETURNING *`,
+      [owner_email.trim(), member_discount_type || 'PERCENTAGE', member_discount_value || 15.0, milestone_target || 10, free_reward_enabled !== false]
+    );
+    res.json({ success: true, settings: result.rows[0] });
+  } catch (error) {
+    console.error('Error saving loyalty settings:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+app.get('/api/customer/loyalty-status', async (req, res) => {
+  try {
+    const { email, owner_email } = req.query;
+    if (!email || !owner_email) {
+      return res.status(400).json({ success: false, message: 'email and owner_email are required' });
+    }
+    const result = await pool.query(
+      'SELECT * FROM pickle_customer WHERE LOWER(email) = LOWER($1) AND LOWER(owner_email) = LOWER($2)',
+      [email.trim(), owner_email.trim()]
+    );
+    if (result.rows.length > 0) {
+      res.json({ success: true, customer: result.rows[0] });
+    } else {
+      res.json({ success: true, customer: null });
+    }
+  } catch (error) {
+    console.error('Error fetching customer loyalty status:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+
 // Catch-all route for React Router (must be the LAST route)
 app.get('*', (req, res) => {
   if (fs.existsSync(path.join(frontendDistPath, 'index.html'))) {
