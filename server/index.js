@@ -3484,6 +3484,8 @@ app.get('/api/booking-services', async (_req, res) => {
 
       return {
         id: c.id, // No longer need to offset ID
+        owner_email: c.owner_email,
+        ownerEmail: c.owner_email,
         name: c.name,
         description: c.description || '',
         price: c.base_price ? `PHP ${parseFloat(c.base_price).toFixed(0)}` : 'PHP 300',
@@ -3501,6 +3503,8 @@ app.get('/api/booking-services', async (_req, res) => {
         latitude: c.latitude,
         longitude: c.longitude,
         owner_payment: {
+          owner_email: c.owner_email,
+          ownerEmail: c.owner_email,
           gcash_number: c.gcash_number || c.owner_payment?.gcash_number,
           paymaya_number: c.paymaya_number || c.owner_payment?.paymaya_number,
           bank_account: c.bank_account || c.owner_payment?.bank_account,
