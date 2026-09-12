@@ -3497,13 +3497,19 @@ app.get('/api/booking-services', async (_req, res) => {
     
     // Map pickleCourts to match ServiceModel structure and attach Cloudinary icons if available
     const mappedCourts = pickleCourts.map(c => {
-      const iconUrl = (c.icon && c.icon.startsWith('http') ? c.icon : 'dYZ_');
+      const resolvedLogo = c.logo_url && c.logo_url.trim().length > 0 ? c.logo_url.trim() : null;
+      const iconUrl = resolvedLogo || (c.icon && c.icon.startsWith('http') ? c.icon : 'dYZ_');
 
       return {
         id: c.id, // No longer need to offset ID
         owner_email: c.owner_email,
         ownerEmail: c.owner_email,
         name: c.name,
+        venue_name: c.venue_name || null,
+        venueName: c.venue_name || null,
+        logo_url: resolvedLogo,
+        logoUrl: resolvedLogo,
+        logo: resolvedLogo,
         description: c.description || '',
         price: c.base_price ? `PHP ${parseFloat(c.base_price).toFixed(0)}` : 'PHP 300',
         address: c.address || 'Cayang, Bogo',
