@@ -3492,6 +3492,10 @@ app.get('/api/booking-services', async (_req, res) => {
         category: 'Pickleball Court',
         is_active: c.active,
         variable_prices: c.hourly_prices,
+        day_start_hour: c.day_start_hour ?? 6,
+        dayStartHour: c.day_start_hour ?? 6,
+        night_start_hour: c.night_start_hour ?? 18,
+        nightStartHour: c.night_start_hour ?? 18,
         latitude: c.latitude,
         longitude: c.longitude,
         owner_payment: {
@@ -6206,18 +6210,22 @@ app.post('/api/courts', async (req, res) => {
       logoUrl, images, photos,
       dayDiscountRate, isDayDiscountActive,
       nightDiscountRate, isNightDiscountActive,
-      bookingPolicy, aboutVenue, faq
+      bookingPolicy, aboutVenue, faq,
+      day_start_hour, dayStartHour, day_start, dayStart,
+      night_start_hour, nightStartHour, night_start, nightStart
     } = req.body;
     
     const finalVenueName = venue_name || venueName || venue || '';
     const finalImages = images || photos || [];
+    const finalDayStart = day_start_hour !== undefined ? day_start_hour : (dayStartHour !== undefined ? dayStartHour : (day_start !== undefined ? day_start : (dayStart !== undefined ? dayStart : 6)));
+    const finalNightStart = night_start_hour !== undefined ? night_start_hour : (nightStartHour !== undefined ? nightStartHour : (night_start !== undefined ? night_start : (nightStart !== undefined ? nightStart : 18)));
 
     const result = await pool.query(
       `INSERT INTO pickle_courts 
         (name, owner_email, duration, description, active, base_price, hourly_prices, address, facilities, 
 court_number, latitude, longitude, open_time, close_time, venue_name, logo_url, images, day_discount_rate, is_day_discount_active, 
-night_discount_rate, is_night_discount_active, booking_policy, about_venue, faq) 
-       VALUES ($1, $2, $3, $4, true, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23) RETURNING *`,
+night_discount_rate, is_night_discount_active, booking_policy, about_venue, faq, day_start_hour, night_start_hour) 
+       VALUES ($1, $2, $3, $4, true, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25) RETURNING *`,
       [
         name, ownerEmail, duration || 30, description || '', 
         basePrice || 0, hourlyPrices ? JSON.stringify(hourlyPrices) : null, 
@@ -6226,7 +6234,8 @@ night_discount_rate, is_night_discount_active, booking_policy, about_venue, faq)
         finalVenueName, logoUrl || null, JSON.stringify(finalImages),
         dayDiscountRate || 0, isDayDiscountActive || false,
         nightDiscountRate || 0, isNightDiscountActive || false,
-        bookingPolicy || '', aboutVenue || '', faq || ''
+        bookingPolicy || '', aboutVenue || '', faq || '',
+        parseInt(finalDayStart) || 6, parseInt(finalNightStart) || 18
       ]
     );
     res.status(201).json({ success: true, court: result.rows[0] });
@@ -6282,11 +6291,15 @@ app.put('/api/courts/:id', async (req, res) => {
       logoUrl, images, photos,
       dayDiscountRate, isDayDiscountActive,
       nightDiscountRate, isNightDiscountActive,
-      bookingPolicy, aboutVenue, faq
+      bookingPolicy, aboutVenue, faq,
+      day_start_hour, dayStartHour, day_start, dayStart,
+      night_start_hour, nightStartHour, night_start, nightStart
     } = req.body;
 
     const finalVenueName = venue_name || venueName || venue || '';
     const finalImages = images || photos || [];
+    const finalDayStart = day_start_hour !== undefined ? day_start_hour : (dayStartHour !== undefined ? dayStartHour : (day_start !== undefined ? day_start : (dayStart !== undefined ? dayStart : 6)));
+    const finalNightStart = night_start_hour !== undefined ? night_start_hour : (nightStartHour !== undefined ? nightStartHour : (night_start !== undefined ? night_start : (nightStart !== undefined ? nightStart : 18)));
 
     const result = await pool.query(
       `UPDATE pickle_courts 
@@ -6295,8 +6308,9 @@ app.put('/api/courts/:id', async (req, res) => {
            latitude = $10, longitude = $11, open_time = $12, close_time = $13,
            venue_name = $14, logo_url = $15, images = $16, day_discount_rate = $17, is_day_discount_active = $18,
            night_discount_rate = $19, is_night_discount_active = $20, booking_policy = $21, about_venue = $22, faq = $23,
+           day_start_hour = $24, night_start_hour = $25,
            updated_at = NOW() 
-       WHERE id = $24 RETURNING *`,
+       WHERE id = $26 RETURNING *`,
       [
         name, duration || 30, description || '', active !== undefined ? active : true, 
         basePrice || 0, hourlyPrices ? JSON.stringify(hourlyPrices) : null, 
@@ -6305,7 +6319,9 @@ app.put('/api/courts/:id', async (req, res) => {
         finalVenueName, logoUrl || null, JSON.stringify(finalImages),
         dayDiscountRate || 0, isDayDiscountActive || false,
         nightDiscountRate || 0, isNightDiscountActive || false,
-        bookingPolicy || '', aboutVenue || '', faq || '', id
+        bookingPolicy || '', aboutVenue || '', faq || '',
+        parseInt(finalDayStart) || 6, parseInt(finalNightStart) || 18,
+        id
       ]
     );
     if (result.rows.length === 0) {
@@ -7307,6 +7323,24 @@ app.post('/api/owner/loyalty-settings', async (req, res) => {
     res.json({ success: true, settings: result.rows[0] });
   } catch (error) {
     console.error('Error saving loyalty settings:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+
+app.get('/api/customer/all-loyalty', async (req, res) => {
+  try {
+    const { email } = req.query;
+    if (!email) {
+      return res.status(400).json({ success: false, message: 'email is required' });
+    }
+    const result = await pool.query(
+      'SELECT * FROM pickle_customer WHERE LOWER(email) = LOWER($1) ORDER BY stamp_count DESC, updated_at DESC',
+      [email.trim()]
+    );
+    res.json({ success: true, loyalty_records: result.rows });
+  } catch (error) {
+    console.error('Error fetching all customer loyalty:', error);
     res.status(500).json({ success: false, message: 'Server error' });
   }
 });
