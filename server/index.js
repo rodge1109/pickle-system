@@ -653,7 +653,7 @@ cron.schedule('* * * * *', async () => {
 });
 
 // Hold an appointment slot
-app.post('/api/appointments/hold', async (req, res) => {
+app.post('/api/appointments/hold-v2-secure', async (req, res) => {
   try {
     const { preferredDate, preferredTimes, serviceType, email } = req.body;
     
