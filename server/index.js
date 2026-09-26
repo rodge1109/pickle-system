@@ -7381,7 +7381,7 @@ app.post('/api/owner/loyalty-settings', async (req, res) => {
            free_reward_enabled = EXCLUDED.free_reward_enabled,
            updated_at = CURRENT_TIMESTAMP
        RETURNING *`,
-      [owner_email.trim(), member_discount_type || 'PERCENTAGE', member_discount_value || 15.0, milestone_target || 10, free_reward_enabled !== false]
+      [owner_email.trim(), member_discount_type || 'PERCENTAGE', (member_discount_value !== undefined && member_discount_value !== null) ? member_discount_value : 0.0, milestone_target || 10, free_reward_enabled !== false]
     );
     res.json({ success: true, settings: result.rows[0] });
   } catch (error) {
