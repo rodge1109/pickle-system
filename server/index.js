@@ -894,7 +894,7 @@ app.post('/api/appointments', async (req, res) => {
       try {
         await pool.query(
           `INSERT INTO pickle_customer (owner_email, full_name, email, phone, is_member, stamp_count, total_bookings, updated_at)
-           VALUES ($1, $2, LOWER($3), $4, true, 1, 1, CURRENT_TIMESTAMP)
+           VALUES ($1, $2, LOWER($3), $4, false, 1, 1, CURRENT_TIMESTAMP)
            ON CONFLICT (owner_email, email) DO UPDATE
            SET full_name = EXCLUDED.full_name,
                phone = COALESCE(EXCLUDED.phone, pickle_customer.phone),
@@ -7315,7 +7315,7 @@ app.post('/api/owner/customers', async (req, res) => {
            is_member = EXCLUDED.is_member,
            updated_at = CURRENT_TIMESTAMP
        RETURNING *`,
-      [owner_email.trim(), full_name.trim(), email.trim().toLowerCase(), phone ? phone.trim() : null, is_member !== false]
+      [owner_email.trim(), full_name.trim(), email.trim().toLowerCase(), phone ? phone.trim() : null, is_member === true || is_member === 'true']
     );
     res.json({ success: true, customer: result.rows[0] });
   } catch (error) {
