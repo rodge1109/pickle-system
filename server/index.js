@@ -6973,9 +6973,7 @@ app.get('/api/owner-earnings/:email', async (req, res) => {
     // We assume specialist_id is used to store the court ID
     const { startDate, endDate } = req.query;
     let query = `
-      SELECT 
-        a.id, 
-        a.full_name as player_name,
+      SELECT a.id, a.full_name as player_name, a.proof_of_payment, a.agent_code, a.booking_type,
         a.preferred_date, 
         a.preferred_time, 
         a.total_amount, 
