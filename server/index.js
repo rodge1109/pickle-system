@@ -1845,8 +1845,11 @@ app.get('/api/admin/all-bookings', async (req, res) => {
       ORDER BY a.id DESC;
     `);
     res.json({ success: true, bookings: result.rows });
-
-
+  } catch (err) {
+    console.error('Error fetching admin all-bookings:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+});
 
 app.get('/api/services', async (req, res) => {
   try {
@@ -7465,13 +7468,6 @@ app.get('/api/customer/loyalty-status', async (req, res) => {
 
 
 // Catch-all route for React Router (must be the LAST route)
-
-  } catch (err) {
-    console.error('Error fetching admin all-bookings:', err);
-    res.status(500).json({ success: false, message: err.message });
-  }
-});
-
 
 app.get('*', (req, res) => {
   if (fs.existsSync(path.join(frontendDistPath, 'index.html'))) {
