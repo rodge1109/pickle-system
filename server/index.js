@@ -1824,7 +1824,6 @@ app.get('/api/admin/all-bookings', async (req, res) => {
         a.phone_number,
         a.email as user_email,
         a.service_type,
-        a.service_type as court_name,
         a.preferred_date, 
         a.preferred_date as appointment_date,
         a.preferred_time, 
@@ -1836,11 +1835,10 @@ app.get('/api/admin/all-bookings', async (req, res) => {
         a.created_at,
         a.proof_of_payment,
         a.agent_code,
-        
-        c.name as court_name,
-        c.owner_email
+        COALESCE(c.name, a.service_type) as court_name,
+        COALESCE(c.owner_email, 'rodge1109@yahoo.com') as owner_email
       FROM pickle_appointment a
-      LEFT JOIN pickle_courts c ON a.service_type = c.name
+      LEFT JOIN pickle_courts c ON LOWER(a.service_type) = LOWER(c.name)
       WHERE a.status != 'cancelled' AND a.status != 'blocked'
       ORDER BY a.id DESC;
     `);

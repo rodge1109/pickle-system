@@ -7,12 +7,11 @@ const pool = new Pool({
   database: process.env.DB_NAME || 'clinic_booking',
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
-  max: 10,
-  idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 5000,
+  max: 5,
+  idleTimeoutMillis: 10000,
+  connectionTimeoutMillis: 10000,
 });
 
-// Test the connection
 pool.on('connect', () => {
   console.log('Connected to PostgreSQL database');
 });
