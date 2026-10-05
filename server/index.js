@@ -1836,7 +1836,7 @@ app.get('/api/admin/all-bookings', async (req, res) => {
         a.created_at,
         a.proof_of_payment,
         a.agent_code,
-        a.booking_type,
+        
         c.name as court_name,
         c.owner_email
       FROM pickle_appointment a
