@@ -1007,6 +1007,53 @@ app.get('/api/available-slots', async (req, res) => {
 
     const bookedResult = await pool.query(queryStr, queryParams);
 
+    // Fetch court operating hours if serviceType is provided
+    let openTime = null;
+    let closeTime = null;
+    if (serviceType && serviceType.trim().length > 0) {
+      const courtRes = await pool.query(
+        `SELECT open_time, close_time FROM courts WHERE LOWER(name) = LOWER($1) OR $1 ILIKE '%' || name || '%' OR name ILIKE '%' || $1 || '%' LIMIT 1`,
+        [serviceType.trim()]
+      );
+      if (courtRes.rows.length > 0) {
+        openTime = courtRes.rows[0].open_time;
+        closeTime = courtRes.rows[0].close_time;
+      }
+    }
+
+    const parseHour = (str, fallback) => {
+      if (!str) return fallback;
+      let clean = str.toString().trim().toUpperCase();
+      if (clean.includes('-')) clean = clean.split('-')[0].trim();
+      if (clean.includes('—')) clean = clean.split('—')[0].trim();
+      let isPm = clean.includes('PM');
+      let isAm = clean.includes('AM');
+      clean = clean.replace('AM', '').replace('PM', '').trim();
+      if (clean.includes(':')) {
+        const parts = clean.split(':');
+        let h = parseInt(parts[0], 10);
+        if (isNaN(h)) return fallback;
+        if (isPm && h < 12) h += 12;
+        if (isAm && h === 12) h = 0;
+        return h;
+      }
+      let h = parseInt(clean, 10);
+      if (isNaN(h)) return fallback;
+      if (isPm && h < 12) h += 12;
+      if (isAm && h === 12) h = 0;
+      return h;
+    };
+
+    let openHour = parseHour(openTime, 0);
+    let closeHour = parseHour(closeTime, 24);
+    if (closeTime && closeTime.toString().includes(':')) {
+      const parts = closeTime.toString().split(':');
+      if (parts.length >= 2 && parseInt(parts[1], 10) > 0 && closeHour < 24) {
+        closeHour += 1;
+      }
+    }
+    if (closeHour === 0) closeHour = 24;
+
     const normalizeTime = (timeStr) => {
       if (!timeStr) return '';
       const match = timeStr.trim().match(/^(\d{1,2}):(\d{2})\s*(AM|PM)$/i);
@@ -1024,7 +1071,20 @@ app.get('/api/available-slots', async (req, res) => {
       .filter(row => row.status === 'blocked')
       .map(row => normalizeTime(row.preferred_time));
     const unavailableSlots = bookedResult.rows.map(row => normalizeTime(row.preferred_time));
-    const availableSlots = allSlots.filter(slot => !unavailableSlots.includes(slot));
+
+    const availableSlots = allSlots.filter(slot => {
+      if (unavailableSlots.includes(slot)) return false;
+      const h = parseHour(slot, -1);
+      if (h === -1) return true;
+      if (openHour > 0 || closeHour < 24) {
+        if (closeHour > openHour) {
+          return h >= openHour && h < closeHour;
+        } else if (closeHour < openHour) {
+          return h >= openHour || h < closeHour;
+        }
+      }
+      return true;
+    });
 
     res.json({
       success: true,
