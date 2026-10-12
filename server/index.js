@@ -7066,11 +7066,10 @@ app.get('/api/owner-earnings/:email', async (req, res) => {
   try {
     const ownerEmail = req.params.email;
     
-    // Fetch all bookings for courts owned by this owner
-    // We assume specialist_id is used to store the court ID
+    // Fetch all bookings for courts owned by this owner (including offline blocks)
     const { startDate, endDate } = req.query;
     let query = `
-      SELECT a.id, a.full_name as player_name, a.proof_of_payment, a.agent_code,
+      SELECT a.id, a.full_name as player_name, a.proof_of_payment, a.agent_code, a.booking_type,
         a.preferred_date, 
         a.preferred_time, 
         a.total_amount, 
@@ -7083,7 +7082,6 @@ app.get('/api/owner-earnings/:email', async (req, res) => {
       JOIN pickle_courts c ON a.service_type = c.name
       WHERE c.owner_email = $1 
         AND a.status != 'cancelled'
-        AND a.status != 'blocked'
     `;
     
     const params = [ownerEmail];
@@ -7097,26 +7095,54 @@ app.get('/api/owner-earnings/:email', async (req, res) => {
     
     const { rows } = await pool.query(query, params);
     
-    // Calculate totals
+    // Calculate totals: P15 fixed service charge per booking session; offline bookings have 0 gross and 0 net
     let grossEarnings = 0;
+    let totalServiceFee = 0;
+    let totalNetEarnings = 0;
     
     const transactions = rows.map(row => {
-      const amount = parseFloat(row.total_amount) || 0;
-      grossEarnings += amount;
-      
-      const serviceFee = amount * 0.065;
-      const netEarnings = amount - serviceFee;
+      const bType = (row.booking_type || '').toLowerCase();
+      const status = (row.status || '').toLowerCase();
+      const pName = (row.player_name || '').toLowerCase();
+      const pMethod = (row.payment_method || '').toLowerCase();
+
+      const isOfflineBlock = status === 'blocked' ||
+        status.includes('block') ||
+        status.includes('maintenance') ||
+        bType === 'owner_block' ||
+        bType.includes('offline') ||
+        bType.includes('block') ||
+        bType.includes('maintenance') ||
+        bType.includes('walk') ||
+        pName.includes('offline') ||
+        pName.includes('maintenance') ||
+        pName.includes('block') ||
+        pMethod === 'cash' ||
+        pMethod === 'offline';
+
+      const courtAmount = parseFloat(row.total_amount) || 0;
+      const serviceFee = 15.0; // P15 service charge per booking session
+      const gross = isOfflineBlock ? 0.0 : (courtAmount + serviceFee);
+      const netEarnings = isOfflineBlock ? 0.0 : courtAmount;
+
+      grossEarnings += gross;
+      totalServiceFee += serviceFee;
+      totalNetEarnings += netEarnings;
       
       return {
         ...row,
-        amount: amount,
+        amount: isOfflineBlock ? 0.0 : courtAmount,
+        gross: gross,
+        gross_amount: gross,
+        grossAmount: gross,
         serviceFee: serviceFee,
-        netEarnings: netEarnings
+        service_fee: serviceFee,
+        netEarnings: netEarnings,
+        net_amount: netEarnings,
+        court_net: netEarnings,
+        is_offline: isOfflineBlock
       };
     });
-    
-    const totalServiceFee = grossEarnings * 0.065;
-    const totalNetEarnings = grossEarnings - totalServiceFee;
     
     res.json({
       success: true,
@@ -7130,9 +7156,6 @@ app.get('/api/owner-earnings/:email', async (req, res) => {
     res.status(500).json({ success: false, message: 'Server error' });
   }
 });
-
-
-
 // ==================== FORGOT PASSWORD ====================
 app.post('/api/user/forgot-password', async (req, res) => {
   const { email } = req.body;
