@@ -3602,6 +3602,8 @@ app.get('/api/booking-services', async (_req, res) => {
         owner_email: c.owner_email,
         ownerEmail: c.owner_email,
         name: c.name,
+        court_number: c.court_number || null,
+        courtNumber: c.court_number || null,
         venue_name: c.venue_name || null,
         venueName: c.venue_name || null,
         logo_url: resolvedLogo,
@@ -3609,6 +3611,16 @@ app.get('/api/booking-services', async (_req, res) => {
         logo: resolvedLogo,
         description: c.description || '',
         price: c.base_price ? `PHP ${parseFloat(c.base_price).toFixed(0)}` : 'PHP 300',
+        base_price: c.base_price ? parseFloat(c.base_price).toFixed(0) : '300',
+        basePrice: c.base_price ? parseFloat(c.base_price).toFixed(0) : '300',
+        hourly_prices: c.hourly_prices,
+        hourlyPrices: c.hourly_prices,
+        images: c.images || [],
+        photos: c.images || [],
+        day_discount_rate: c.day_discount_rate,
+        is_day_discount_active: c.is_day_discount_active,
+        night_discount_rate: c.night_discount_rate,
+        is_night_discount_active: c.is_night_discount_active,
         address: c.address || 'Cayang, Bogo',
         facilities: parseFacilitiesHelper(c.facilities),
         icon: iconUrl,
@@ -6365,6 +6377,9 @@ app.post('/api/courts', async (req, res) => {
       night_start_hour, nightStartHour, night_start, nightStart
     } = req.body;
     
+    const finalOpenTime = openTime || req.body.open_time || '00:00';
+    const finalCloseTime = closeTime || req.body.close_time || '23:59';
+    const finalCourtNumber = courtNumber || req.body.court_number || null;
     const finalVenueName = venue_name || venueName || venue || '';
     const finalImages = images || photos || [];
     const finalDayStart = day_start_hour !== undefined ? day_start_hour : (dayStartHour !== undefined ? dayStartHour : (day_start !== undefined ? day_start : (dayStart !== undefined ? dayStart : 6)));
@@ -6379,7 +6394,7 @@ night_discount_rate, is_night_discount_active, booking_policy, about_venue, faq,
       [
         name, ownerEmail, duration || 30, description || '', 
         basePrice || 0, hourlyPrices ? JSON.stringify(hourlyPrices) : null, 
-        address || '', facilities !== undefined ? (typeof facilities === 'string' ? facilities : JSON.stringify(facilities)) : '[]', courtNumber || null, latitude || null, longitude || null,
+        address || '', facilities !== undefined ? (typeof facilities === 'string' ? facilities : JSON.stringify(facilities)) : '[]', finalCourtNumber, latitude || null, longitude || null,
         finalOpenTime, finalCloseTime,
         finalVenueName, logoUrl || null, JSON.stringify(finalImages),
         dayDiscountRate || 0, isDayDiscountActive || false,
@@ -6450,6 +6465,9 @@ app.put('/api/courts/:id', async (req, res) => {
       night_start_hour, nightStartHour, night_start, nightStart
     } = req.body;
 
+    const finalOpenTime = openTime || req.body.open_time || '00:00';
+    const finalCloseTime = closeTime || req.body.close_time || '23:59';
+    const finalCourtNumber = courtNumber || req.body.court_number || null;
     const finalVenueName = venue_name || venueName || venue || '';
     const finalImages = images || photos || [];
     const finalDayStart = day_start_hour !== undefined ? day_start_hour : (dayStartHour !== undefined ? dayStartHour : (day_start !== undefined ? day_start : (dayStart !== undefined ? dayStart : 6)));
@@ -6468,7 +6486,7 @@ app.put('/api/courts/:id', async (req, res) => {
       [
         name, duration || 30, description || '', active !== undefined ? active : true, 
         basePrice || 0, hourlyPrices ? JSON.stringify(hourlyPrices) : null, 
-        address || '', (facilities !== undefined && facilities !== null) ? (typeof facilities === 'string' ? facilities : JSON.stringify(facilities)) : '[]', courtNumber || null, latitude || null, longitude || null,
+        address || '', (facilities !== undefined && facilities !== null) ? (typeof facilities === 'string' ? facilities : JSON.stringify(facilities)) : '[]', finalCourtNumber, latitude || null, longitude || null,
         finalOpenTime, finalCloseTime,
         finalVenueName, logoUrl || null, JSON.stringify(finalImages),
         dayDiscountRate || 0, isDayDiscountActive || false,
