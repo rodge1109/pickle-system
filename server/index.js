@@ -3649,7 +3649,9 @@ app.get('/api/booking-services', async (_req, res) => {
         close_time: c.close_time || '23:59',
         about_venue: c.about_venue || '',
         booking_policy: c.booking_policy || '',
-        faq: c.faq || ''
+        faq: c.faq || '',
+        is_verified: c.is_verified === true,
+        isVerified: c.is_verified === true
       };
     });
     
@@ -6526,6 +6528,26 @@ app.delete('/api/courts/:id', async (req, res) => {
   } catch (error) {
     console.error('Error deleting court:', error);
     res.status(500).json({ success: false, message: 'Failed to delete court' });
+  }
+});
+
+app.post('/api/courts/toggle-verified', async (req, res) => {
+  try {
+    const { courtId, venueName, ownerEmail, isVerified } = req.body;
+    const verifyBool = isVerified === true;
+    
+    if (courtId) {
+      await pool.query('UPDATE pickle_courts SET is_verified = $1, updated_at = NOW() WHERE id = $2', [verifyBool, courtId]);
+    }
+    if (venueName && ownerEmail) {
+      await pool.query('UPDATE pickle_courts SET is_verified = $1, updated_at = NOW() WHERE LOWER(venue_name) = LOWER($2) AND LOWER(owner_email) = LOWER($3)', [verifyBool, venueName.trim(), ownerEmail.trim()]);
+    } else if (venueName) {
+      await pool.query('UPDATE pickle_courts SET is_verified = $1, updated_at = NOW() WHERE LOWER(venue_name) = LOWER($2)', [verifyBool, venueName.trim()]);
+    }
+    res.json({ success: true, isVerified: verifyBool });
+  } catch (err) {
+    console.error('Error toggling court verification:', err);
+    res.status(500).json({ success: false, message: err.message });
   }
 });
 
