@@ -8003,8 +8003,8 @@ app.get('/api/booking-logs', async (req, res) => {
       query += ` AND booking_date = ${params.length}::date`;
     }
 
-    query += ` ORDER BY created_at DESC LIMIT ${params.length + 1}`;
     params.push(parseInt(limit) || 100);
+    query += ` ORDER BY created_at DESC LIMIT ${params.length}`;
 
     const result = await pool.query(query, params);
     res.json({ success: true, logs: result.rows });
