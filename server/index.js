@@ -7890,6 +7890,131 @@ app.get('/api/customer/loyalty-status', async (req, res) => {
 });
 
 
+// -------------------------------------------------------------
+// BOOKING AUDIT & PAYMENT ATTEMPTS LOGS
+// -------------------------------------------------------------
+app.post('/api/booking-logs', async (req, res) => {
+  try {
+    const {
+      logId,
+      customerName,
+      customerEmail,
+      customerPhone,
+      venueName,
+      courtNames,
+      bookingDate,
+      timeSlots,
+      totalAmount,
+      paymentMethod,
+      referenceNumber,
+      stage,
+      errorMessage,
+      metadata
+    } = req.body;
+
+    if (logId) {
+      const updateQuery = `
+        UPDATE pickle_booking_logs
+        SET 
+          customer_name = COALESCE($1, customer_name),
+          customer_email = COALESCE($2, customer_email),
+          customer_phone = COALESCE($3, customer_phone),
+          reference_number = COALESCE($4, reference_number),
+          stage = COALESCE($5, stage),
+          error_message = COALESCE($6, error_message),
+          total_amount = COALESCE($7, total_amount),
+          metadata = COALESCE($8, metadata),
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = $9
+        RETURNING *
+      `;
+      const result = await pool.query(updateQuery, [
+        customerName || null,
+        customerEmail || null,
+        customerPhone || null,
+        referenceNumber || null,
+        stage || null,
+        errorMessage || null,
+        totalAmount ? parseFloat(totalAmount) : null,
+        metadata ? JSON.stringify(metadata) : null,
+        logId
+      ]);
+      if (result.rows.length > 0) {
+        return res.json({ success: true, log: result.rows[0] });
+      }
+    }
+
+    const insertQuery = `
+      INSERT INTO pickle_booking_logs (
+        customer_name, customer_email, customer_phone, venue_name,
+        court_names, booking_date, time_slots, total_amount,
+        payment_method, reference_number, stage, error_message, metadata
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      RETURNING *
+    `;
+    const result = await pool.query(insertQuery, [
+      customerName || '',
+      customerEmail || '',
+      customerPhone || '',
+      venueName || '',
+      courtNames || '',
+      bookingDate || null,
+      timeSlots || '',
+      totalAmount ? parseFloat(totalAmount) : 0,
+      paymentMethod || 'GCash',
+      referenceNumber || null,
+      stage || 'PAYMENT_VIEWED',
+      errorMessage || null,
+      metadata ? JSON.stringify(metadata) : null
+    ]);
+
+    res.json({ success: true, log: result.rows[0] });
+  } catch (error) {
+    console.error('Error logging booking attempt:', error);
+    res.status(500).json({ success: false, message: 'Failed to record booking log' });
+  }
+});
+
+app.get('/api/booking-logs', async (req, res) => {
+  try {
+    const { email, phone, ref, venue, date, limit } = req.query;
+    let query = `SELECT * FROM pickle_booking_logs WHERE 1=1`;
+    const params = [];
+
+    if (email) {
+      params.push(`%${email.trim().toLowerCase()}%`);
+      query += ` AND LOWER(customer_email) LIKE ${params.length}`;
+    }
+    if (phone) {
+      params.push(`%${phone.trim()}%`);
+      query += ` AND customer_phone LIKE ${params.length}`;
+    }
+    if (ref) {
+      params.push(`%${ref.trim()}%`);
+      query += ` AND reference_number ILIKE ${params.length}`;
+    }
+    if (venue) {
+      params.push(`%${venue.trim().toLowerCase()}%`);
+      query += ` AND LOWER(venue_name) LIKE ${params.length}`;
+    }
+    if (date) {
+      params.push(date);
+      query += ` AND booking_date = ${params.length}::date`;
+    }
+
+    query += ` ORDER BY created_at DESC LIMIT ${params.length + 1}`;
+    params.push(parseInt(limit) || 100);
+
+    const result = await pool.query(query, params);
+    res.json({ success: true, logs: result.rows });
+  } catch (error) {
+    console.error('Error fetching booking logs:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch logs' });
+  }
+});
+
+
 // Catch-all route for React Router (must be the LAST route)
 
 app.get('*', (req, res) => {
