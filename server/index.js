@@ -16,6 +16,32 @@ function parseFacilitiesHelper(fac) {
   return [];
 }
 const express = require('express');
+// ==================== MEMORY OPTIMIZATION & WATCHDOG ====================
+// Protect against Render's 512MB RAM limit by proactively releasing heap
+if (typeof global.gc === 'function') {
+  console.log('[Memory Watchdog] Proactive Garbage Collection enabled (--expose-gc).');
+} else {
+  console.log('[Memory Watchdog] Running in standard mode. Consider adding --expose-gc.');
+}
+
+setInterval(() => {
+  try {
+    const mem = process.memoryUsage();
+    const rssMB = Math.round(mem.rss / 1024 / 1024);
+    const heapUsedMB = Math.round(mem.heapUsed / 1024 / 1024);
+    
+    if (typeof global.gc === 'function') {
+      if (rssMB > 220 || heapUsedMB > 150) {
+        global.gc();
+        const after = process.memoryUsage();
+        const afterRss = Math.round(after.rss / 1024 / 1024);
+        const afterHeap = Math.round(after.heapUsed / 1024 / 1024);
+        console.log(`[Memory Watchdog] Cleaned memory: RSS ${rssMB}MB -> ${afterRss}MB, Heap ${heapUsedMB}MB -> ${afterHeap}MB`);
+      }
+    }
+  } catch (_) {}
+}, 30000);
+
 const cron = require('node-cron');
 const http = require('http');
 const { WebSocketServer } = require('ws');
@@ -48,8 +74,8 @@ const PORT = process.env.PORT || 5000;
 
 // Middleware
 app.use(cors());
-app.use(express.json({ limit: '15mb' }));
-app.use(express.urlencoded({ limit: '15mb', extended: true }));
+app.use(express.json({ limit: '8mb' }));
+app.use(express.urlencoded({ limit: '8mb', extended: true }));
 app.use('/api', (req, res, next) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.setHeader('Pragma', 'no-cache');
@@ -5922,7 +5948,7 @@ cron.schedule('0 6 * * *', async () => {
       if (preferred_date) {
         datesToCheck.push(new Date(preferred_date).toISOString().split('T')[0]);
       } else {
-        for (let i = 0; i < 30; i++) {
+        for (let i = 0; i < 7; i++) {
           const date = new Date();
           date.setDate(date.getDate() + i);
           datesToCheck.push(date.toISOString().split('T')[0]);
@@ -5996,7 +6022,7 @@ app.get('/api/test-summary', async (req, res) => {
       if (preferred_date) {
         datesToCheck.push(new Date(preferred_date).toISOString().split('T')[0]);
       } else {
-        for (let i = 0; i < 30; i++) {
+        for (let i = 0; i < 7; i++) {
           const date = new Date();
           date.setDate(date.getDate() + i);
           datesToCheck.push(date.toISOString().split('T')[0]);
@@ -6076,7 +6102,7 @@ app.get('/api/user/booking-assistant/trigger/:email', async (req, res) => {
       if (preferred_date) {
         datesToCheck.push(new Date(preferred_date).toISOString().split('T')[0]);
       } else {
-        for (let i = 0; i < 30; i++) {
+        for (let i = 0; i < 7; i++) {
           const date = new Date();
           date.setDate(date.getDate() + i);
           datesToCheck.push(date.toISOString().split('T')[0]);
