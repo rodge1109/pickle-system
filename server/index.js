@@ -5758,13 +5758,38 @@ app.post('/api/auth/google', async (req, res) => {
     const { token, role } = req.body;
     const userRole = role || 'user';
     
-    const ticket = await googleClient.verifyIdToken({
-      idToken: token,
-      audience: '791853418225-nnsmvmfnabhqlevkevbp8549mccha2he.apps.googleusercontent.com'
-    });
-    const payload = ticket.getPayload();
-    const email = payload.email;
-    const name = payload.name;
+    let email = null;
+    let name = null;
+
+    // 1. Try verifying as Google ID Token
+    try {
+      const ticket = await googleClient.verifyIdToken({
+        idToken: token,
+        audience: '791853418225-nnsmvmfnabhqlevkevbp8549mccha2he.apps.googleusercontent.com'
+      });
+      const payload = ticket.getPayload();
+      email = payload.email;
+      name = payload.name;
+    } catch (idTokenErr) {
+      console.log('ID Token verification failed, checking UserInfo with access token...', idTokenErr.message);
+      // 2. Fallback: verify as Google Access Token
+      try {
+        const userInfoRes = await axios.get('https://www.googleapis.com/oauth2/v3/userinfo', {
+          headers: { Authorization: `Bearer ${token}` }
+        });
+        if (userInfoRes.data && userInfoRes.data.email) {
+          email = userInfoRes.data.email;
+          name = userInfoRes.data.name || email.split('@')[0];
+        }
+      } catch (accessTokenErr) {
+        console.error('AccessToken verification failed:', accessTokenErr.message);
+        throw new Error('Google token could not be verified: ' + idTokenErr.message);
+      }
+    }
+
+    if (!email) {
+      return res.status(400).json({ success: false, message: 'Could not obtain email from Google' });
+    }
     
     let { rows } = await pool.query(`SELECT * FROM users WHERE email = $1`, [email]);
     
