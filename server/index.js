@@ -6319,7 +6319,8 @@ app.get('/api/owner/bookings/:email', async (req, res) => {
   try {
     const { email } = req.params;
     const { rows } = await pool.query(
-      `SELECT a.*, a.preferred_date as appointment_date, a.preferred_time as appointment_time 
+      `SELECT a.*, a.preferred_date as appointment_date, a.preferred_time as appointment_time,
+              COALESCE(c.venue_name, c.name) as venue_name, c.name as court_name, c.owner_email as owner_email
        FROM pickle_appointment a
        JOIN pickle_courts c ON a.service_type = c.name
        WHERE c.owner_email = $1 
@@ -7168,7 +7169,9 @@ app.get('/api/owner-earnings/:email', async (req, res) => {
         a.payment_method,
         a.is_open_play,
         a.created_at,
-        c.name as court_name
+        c.name as court_name,
+        COALESCE(c.venue_name, c.name) as venue_name,
+        c.owner_email as owner_email
       FROM pickle_appointment a
       JOIN pickle_courts c ON a.service_type = c.name
       WHERE c.owner_email = $1 
