@@ -1037,13 +1037,17 @@ app.get('/api/available-slots', async (req, res) => {
     let openTime = null;
     let closeTime = null;
     if (serviceType && serviceType.trim().length > 0) {
-      const courtRes = await pool.query(
-        `SELECT open_time, close_time FROM courts WHERE LOWER(name) = LOWER($1) OR $1 ILIKE '%' || name || '%' OR name ILIKE '%' || $1 || '%' LIMIT 1`,
-        [serviceType.trim()]
-      );
-      if (courtRes.rows.length > 0) {
-        openTime = courtRes.rows[0].open_time;
-        closeTime = courtRes.rows[0].close_time;
+      try {
+        const courtRes = await pool.query(
+          `SELECT open_time, close_time FROM pickle_courts WHERE LOWER(name) = LOWER($1) OR $1 ILIKE '%' || name || '%' OR name ILIKE '%' || $1 || '%' OR LOWER(venue_name) = LOWER($1) LIMIT 1`,
+          [serviceType.trim()]
+        );
+        if (courtRes.rows.length > 0) {
+          openTime = courtRes.rows[0].open_time;
+          closeTime = courtRes.rows[0].close_time;
+        }
+      } catch (courtErr) {
+        console.error('Error fetching court hours:', courtErr.message);
       }
     }
 
