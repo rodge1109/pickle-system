@@ -973,9 +973,12 @@ app.post('/api/appointments', async (req, res) => {
     });
   } catch (error) {
     console.error('Error creating appointment:', error);
+    const userMsg = (error.message && error.message.includes('Security Block:'))
+      ? error.message.replace(/^error:\s*/i, '')
+      : (error.message || 'Failed to book appointment. Please try again.');
     res.status(500).json({
       success: false,
-      message: 'Failed to book appointment. Please try again.'
+      message: userMsg
     });
   }
 });
