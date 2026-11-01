@@ -6939,22 +6939,66 @@ app.post('/api/owner/slots/unblock', async (req, res) => {
 // Cancel a reservation
 app.post('/api/owner/appointments/cancel', async (req, res) => {
   try {
-    const { courtName, date, time } = req.body;
+    const { bookingId, appointmentId, courtName, date, time } = req.body;
+    const bId = bookingId || appointmentId;
     
-    await pool.query(
-      `UPDATE pickle_appointment 
-       SET status = 'cancelled'
-       WHERE service_type = $1 AND preferred_date = $2 AND preferred_time = $3 AND status != 'cancelled' AND status != 'blocked'`,
-      [courtName, date, time]
-    );
-    
-    // Notify any matching booking assistants
-    notifyBookingAssistants(courtName, date, time);
+    if (bId) {
+      const result = await pool.query(
+        `UPDATE pickle_appointment 
+         SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1 AND status != 'cancelled'
+         RETURNING service_type, preferred_date, preferred_time`,
+        [bId]
+      );
+      if (result.rows.length > 0 && typeof notifyBookingAssistants === 'function') {
+        const row = result.rows[0];
+        notifyBookingAssistants(row.service_type, row.preferred_date, row.preferred_time);
+      }
+    } else if (courtName && date && time) {
+      await pool.query(
+        `UPDATE pickle_appointment 
+         SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP
+         WHERE service_type = $1 AND preferred_date = $2 AND preferred_time = $3 AND status != 'cancelled' AND status != 'blocked'`,
+        [courtName, date, time]
+      );
+      if (typeof notifyBookingAssistants === 'function') {
+        notifyBookingAssistants(courtName, date, time);
+      }
+    }
 
     res.json({ success: true, message: 'Reservation cancelled successfully' });
   } catch (err) {
     console.error('Cancel reservation error:', err);
     res.status(500).json({ success: false, message: 'Failed to cancel reservation' });
+  }
+});
+
+// Verify & Confirm a reservation
+app.post('/api/owner/appointments/confirm', async (req, res) => {
+  try {
+    const { bookingId, appointmentId, courtName, date, time } = req.body;
+    const bId = bookingId || appointmentId;
+    
+    if (bId) {
+      await pool.query(
+        `UPDATE pickle_appointment 
+         SET status = 'confirmed', updated_at = CURRENT_TIMESTAMP
+         WHERE id = $1`,
+        [bId]
+      );
+    } else if (courtName && date && time) {
+      await pool.query(
+        `UPDATE pickle_appointment 
+         SET status = 'confirmed', updated_at = CURRENT_TIMESTAMP
+         WHERE service_type = $1 AND preferred_date = $2 AND preferred_time = $3`,
+        [courtName, date, time]
+      );
+    }
+
+    res.json({ success: true, message: 'Reservation verified and confirmed successfully' });
+  } catch (err) {
+    console.error('Confirm reservation error:', err);
+    res.status(500).json({ success: false, message: 'Failed to confirm reservation' });
   }
 });
 
