@@ -687,10 +687,15 @@ app.post('/api/appointments/hold-v2-secure', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Missing required fields' });
     }
 
+    // Prune expired holds first (older than 5 minutes)
+    try {
+      await pool.query("DELETE FROM pickle_appointment WHERE status = 'held' AND created_at < NOW() - INTERVAL '5 minutes'");
+    } catch (_) {}
+
     // Check for overlap for each time
     for (const time of preferredTimes) {
       const overlapCheck = await pool.query(
-        `SELECT * FROM pickle_appointment
+        `SELECT id FROM pickle_appointment
          WHERE preferred_date::date = $1::date
          AND preferred_time = $2
          AND (
@@ -699,7 +704,8 @@ app.post('/api/appointments/hold-v2-secure', async (req, res) => {
            OR service_type ILIKE '%' || $3 || '%'
            OR LOWER(REGEXP_REPLACE(service_type, '[^a-zA-Z0-9]', '', 'g')) = LOWER(REGEXP_REPLACE($3, '[^a-zA-Z0-9]', '', 'g'))
          )
-         AND status != 'cancelled'`,
+         AND status != 'cancelled'
+         AND (status != 'held' OR created_at >= NOW() - INTERVAL '5 minutes')`,
         [preferredDate, time, serviceType]
       );
       if (overlapCheck.rows.length > 0) {
@@ -710,12 +716,13 @@ app.post('/api/appointments/hold-v2-secure', async (req, res) => {
     const holdToken = Math.random().toString(36).substring(2) + Date.now().toString(36);
 
     for (const time of preferredTimes) {
+      const validEmail = (email && email.includes('@')) ? email.trim() : 'hold@picklebook-ph.com';
       await pool.query(
         `INSERT INTO pickle_appointment (
           preferred_date, preferred_time, service_type, email, status, cancel_token, 
           full_name, phone_number, payment_method, total_amount, created_at
-        ) VALUES ($1, $2, $3, $4, 'held', $5, '', '', '', 0, NOW())`,
-        [preferredDate, time, serviceType, email || '', holdToken]
+        ) VALUES ($1, $2, $3, $4, 'held', $5, 'Temporary Hold', '', '', 0, NOW())`,
+        [preferredDate, time, serviceType, validEmail, holdToken]
       );
     }
 
@@ -795,7 +802,12 @@ app.post('/api/appointments', async (req, res) => {
     }
 
     // Check for overlapping appointments (same date, time, and service type)
-    let overlapQuery = `SELECT * FROM pickle_appointment
+        // Prune expired holds first
+    try {
+      await pool.query("DELETE FROM pickle_appointment WHERE status = 'held' AND created_at < NOW() - INTERVAL '5 minutes'");
+    } catch (_) {}
+
+    let overlapQuery = `SELECT id FROM pickle_appointment
        WHERE preferred_date::date = $1::date
        AND preferred_time = $2
        AND (
@@ -804,7 +816,8 @@ app.post('/api/appointments', async (req, res) => {
          OR service_type ILIKE '%' || $3 || '%'
          OR LOWER(REGEXP_REPLACE(service_type, '[^a-zA-Z0-9]', '', 'g')) = LOWER(REGEXP_REPLACE($3, '[^a-zA-Z0-9]', '', 'g'))
        )
-       AND status != 'cancelled'`;
+       AND status != 'cancelled'
+       AND (status != 'held' OR created_at >= NOW() - INTERVAL '5 minutes')`;
        
     let overlapParams = [preferredDate, preferredTime, serviceType];
     
@@ -971,8 +984,14 @@ app.post('/api/appointments', async (req, res) => {
       message: 'Appointment booked successfully! A confirmation email has been sent.',
       appointment: appointment
     });
-  } catch (error) {
+    } catch (error) {
     console.error('Error creating appointment:', error);
+    if (error.code === '23505' || (error.message && error.message.includes('uq_pickle_appointment_slot'))) {
+      return res.status(409).json({
+        success: false,
+        message: 'Sorry, this time slot was just booked by another user. Please choose a different time.'
+      });
+    }
     const userMsg = (error.message && error.message.includes('Security Block:'))
       ? error.message.replace(/^error:\s*/i, '')
       : (error.message || 'Failed to book appointment. Please try again.');
@@ -986,6 +1005,11 @@ app.post('/api/appointments', async (req, res) => {
 // Get available time slots for a date
 app.get('/api/available-slots', async (req, res) => {
   try {
+    // Automatically prune expired holds older than 5 minutes so available slots are 100% real-time accurate
+    try {
+      await pool.query("DELETE FROM pickle_appointment WHERE status = 'held' AND created_at < NOW() - INTERVAL '5 minutes'");
+    } catch (_) {}
+
     const { date, serviceType } = req.query;
     if (!date) {
       return res.status(400).json({
@@ -1021,7 +1045,10 @@ app.get('/api/available-slots', async (req, res) => {
 
     // Get booked slots for the date (using ::date casting for PostgreSQL timestamp compatibility)
     let queryParams = [date];
-    let queryStr = `SELECT preferred_time, status, service_type FROM pickle_appointment WHERE preferred_date::date = $1::date AND status != 'cancelled'`;
+    let queryStr = `SELECT preferred_time, status, service_type FROM pickle_appointment 
+      WHERE preferred_date::date = $1::date 
+      AND status != 'cancelled'
+      AND (status != 'held' OR created_at >= NOW() - INTERVAL '5 minutes')`;
     
     if (serviceType && serviceType.trim().length > 0) {
       const cleanServiceType = serviceType.trim();
