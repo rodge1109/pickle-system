@@ -681,6 +681,18 @@ cron.schedule('* * * * *', async () => {
 // Hold an appointment slot
 const holdRateLimitMap = new Map(); // ip -> timestamp array
 
+const getSafeClientIp = (req) => {
+  try {
+    const xff = req.headers ? req.headers['x-forwarded-for'] : null;
+    if (xff) {
+      return (Array.isArray(xff) ? xff[0] : xff).toString().split(',')[0].trim();
+    }
+    if (req.ip) return req.ip.toString();
+    if (req.socket && req.socket.remoteAddress) return req.socket.remoteAddress.toString();
+  } catch (_) {}
+  return 'unknown';
+};
+
 // Hold an appointment slot
 app.post('/api/appointments/hold-v2-secure', async (req, res) => {
   try {
@@ -688,16 +700,16 @@ app.post('/api/appointments/hold-v2-secure', async (req, res) => {
     
     // BOT DEFENSE: Require genuine appSecret key
     if (appSecret !== 'pickle_v2_app_secret_key_88') {
-      const clientIp = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown').toString().split(',')[0].trim();
+      const clientIp = getSafeClientIp(req);
       console.warn(`[BOT BLOCKED] Hold request without valid appSecret from IP ${clientIp}`);
       return res.status(403).json({ success: false, message: 'Forbidden: Bot protection triggered.' });
     }
 
-    // BOT DEFENSE: Rate limit per IP (max 8 hold requests in 2 minutes)
-    const clientIp = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown').toString().split(',')[0].trim();
+    // BOT DEFENSE: Rate limit per IP (allow up to 40 holds per 2 minutes)
+    const clientIp = getSafeClientIp(req);
     const now = Date.now();
     const userHolds = (holdRateLimitMap.get(clientIp) || []).filter(t => now - t < 120000);
-    if (userHolds.length >= 8) {
+    if (userHolds.length >= 40) {
       console.warn(`[RATE LIMIT EXCEEDED] IP ${clientIp} made ${userHolds.length} hold requests in 2 minutes.`);
       return res.status(429).json({ success: false, message: 'Too many hold attempts. Please wait 2 minutes.' });
     }
