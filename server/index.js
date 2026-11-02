@@ -679,9 +679,30 @@ cron.schedule('* * * * *', async () => {
 });
 
 // Hold an appointment slot
+const holdRateLimitMap = new Map(); // ip -> timestamp array
+
+// Hold an appointment slot
 app.post('/api/appointments/hold-v2-secure', async (req, res) => {
   try {
-    const { preferredDate, preferredTimes, serviceType, email } = req.body;
+    const { preferredDate, preferredTimes, serviceType, email, appSecret } = req.body;
+    
+    // BOT DEFENSE: Require genuine appSecret key
+    if (appSecret !== 'pickle_v2_app_secret_key_88') {
+      const clientIp = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown').toString().split(',')[0].trim();
+      console.warn(`[BOT BLOCKED] Hold request without valid appSecret from IP ${clientIp}`);
+      return res.status(403).json({ success: false, message: 'Forbidden: Bot protection triggered.' });
+    }
+
+    // BOT DEFENSE: Rate limit per IP (max 8 hold requests in 2 minutes)
+    const clientIp = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || 'unknown').toString().split(',')[0].trim();
+    const now = Date.now();
+    const userHolds = (holdRateLimitMap.get(clientIp) || []).filter(t => now - t < 120000);
+    if (userHolds.length >= 8) {
+      console.warn(`[RATE LIMIT EXCEEDED] IP ${clientIp} made ${userHolds.length} hold requests in 2 minutes.`);
+      return res.status(429).json({ success: false, message: 'Too many hold attempts. Please wait 2 minutes.' });
+    }
+    userHolds.push(now);
+    holdRateLimitMap.set(clientIp, userHolds);
     
     if (!preferredDate || !preferredTimes || !preferredTimes.length || !serviceType) {
       return res.status(400).json({ success: false, message: 'Missing required fields' });
@@ -770,7 +791,22 @@ app.post('/api/appointments', async (req, res) => {
     } = req.body;
 
     // Validate required fields
-    if (!fullName || !phoneNumber || !email || !serviceType || !preferredDate || !preferredTime) {
+    // Validate required fields and prevent bot spam with empty/whitespace names
+    if (!fullName || typeof fullName !== 'string' || fullName.trim().length < 2) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide a valid full name (minimum 2 characters)'
+      });
+    }
+
+    if (!phoneNumber || typeof phoneNumber !== 'string' || phoneNumber.trim().length < 7) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide a valid phone number'
+      });
+    }
+
+    if (!email || !email.includes('@') || !serviceType || !preferredDate || !preferredTime) {
       return res.status(400).json({
         success: false,
         message: 'Please fill in all required fields'
@@ -871,7 +907,7 @@ app.post('/api/appointments', async (req, res) => {
         open_play_instructions, open_play_payment_details, status,
         is_open_challenge, challenge_type, host_tandem_name, challenge_description
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, 'confirmed', $27, $28, $29, $30)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, 'pending', $27, $28, $29, $30)
       RETURNING *
     `;
 
