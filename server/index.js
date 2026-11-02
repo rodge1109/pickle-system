@@ -750,7 +750,7 @@ app.post('/api/appointments/hold-v2-secure', async (req, res) => {
     res.json({ success: true, holdToken });
   } catch (err) {
     console.error('Hold slot error:', err);
-    res.status(500).json({ success: false, message: 'Server error holding slot' });
+    res.status(500).json({ success: false, message: err.message || 'Server error holding slot', error: err.toString() });
   }
 });
 
