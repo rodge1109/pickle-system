@@ -694,6 +694,24 @@ const getSafeClientIp = (req) => {
 };
 
 // Hold an appointment slot
+
+// Health & Version check endpoint
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'healthy',
+    version: '2.5.0',
+    botDefense: 'active',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Legacy hold endpoint - strictly block unverified requests
+app.post('/api/appointments/hold', (req, res) => {
+  return res.status(403).json({
+    success: false,
+    message: 'Forbidden: Please update app. hold-v2-secure with appSecret is required.'
+  });
+});
 app.post('/api/appointments/hold-v2-secure', async (req, res) => {
   try {
     const { preferredDate, preferredTimes, serviceType, email, appSecret } = req.body;
