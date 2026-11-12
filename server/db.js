@@ -7,13 +7,15 @@ const pool = new Pool({
   database: process.env.DB_NAME || 'clinic_booking',
   user: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
+  options: '-c timezone=Asia/Manila',
   max: 5,
   idleTimeoutMillis: 10000,
   connectionTimeoutMillis: 10000,
 });
 
-pool.on('connect', () => {
-  console.log('Connected to PostgreSQL database');
+pool.on('connect', (client) => {
+  client.query("SET TIME ZONE 'Asia/Manila'").catch(() => {});
+  console.log('Connected to PostgreSQL database (Asia/Manila)');
 });
 
 pool.on('error', (err) => {

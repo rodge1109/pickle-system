@@ -740,7 +740,7 @@ app.post('/api/appointments/hold-v2-secure', async (req, res) => {
 
     // Prune expired holds first (older than 5 minutes)
     try {
-      await pool.query("DELETE FROM pickle_appointment WHERE status = 'held' AND created_at < NOW() - INTERVAL '5 minutes'");
+      await pool.query("DELETE FROM pickle_appointment WHERE status = 'held' AND created_at < (NOW() AT TIME ZONE 'Asia/Manila') - INTERVAL '5 minutes'");
     } catch (_) {}
 
     // Check for overlap for each time
@@ -756,7 +756,7 @@ app.post('/api/appointments/hold-v2-secure', async (req, res) => {
            OR LOWER(REGEXP_REPLACE(service_type, '[^a-zA-Z0-9]', '', 'g')) = LOWER(REGEXP_REPLACE($3, '[^a-zA-Z0-9]', '', 'g'))
          )
          AND status != 'cancelled'
-         AND (status != 'held' OR created_at >= NOW() - INTERVAL '5 minutes')`,
+         AND (status != 'held' OR created_at >= (NOW() AT TIME ZONE 'Asia/Manila') - INTERVAL '5 minutes')`,
         [preferredDate, time, serviceType]
       );
       if (overlapCheck.rows.length > 0) {
@@ -772,7 +772,7 @@ app.post('/api/appointments/hold-v2-secure', async (req, res) => {
         `INSERT INTO pickle_appointment (
           preferred_date, preferred_time, service_type, email, status, cancel_token, 
           full_name, phone_number, payment_method, total_amount, created_at
-        ) VALUES ($1, $2, $3, $4, 'held', $5, 'Temporary Hold', '', '', 0, NOW())`,
+        ) VALUES ($1, $2, $3, $4, 'held', $5, 'Temporary Hold', '', '', 0, (NOW() AT TIME ZONE 'Asia/Manila'))`,
         [preferredDate, time, serviceType, validEmail, holdToken]
       );
     }
@@ -870,7 +870,7 @@ app.post('/api/appointments', async (req, res) => {
     // Check for overlapping appointments (same date, time, and service type)
         // Prune expired holds first
     try {
-      await pool.query("DELETE FROM pickle_appointment WHERE status = 'held' AND created_at < NOW() - INTERVAL '5 minutes'");
+      await pool.query("DELETE FROM pickle_appointment WHERE status = 'held' AND created_at < (NOW() AT TIME ZONE 'Asia/Manila') - INTERVAL '5 minutes'");
     } catch (_) {}
 
     let overlapQuery = `SELECT id FROM pickle_appointment
@@ -883,7 +883,7 @@ app.post('/api/appointments', async (req, res) => {
          OR LOWER(REGEXP_REPLACE(service_type, '[^a-zA-Z0-9]', '', 'g')) = LOWER(REGEXP_REPLACE($3, '[^a-zA-Z0-9]', '', 'g'))
        )
        AND status != 'cancelled'
-       AND (status != 'held' OR created_at >= NOW() - INTERVAL '5 minutes')`;
+       AND (status != 'held' OR created_at >= (NOW() AT TIME ZONE 'Asia/Manila') - INTERVAL '5 minutes')`;
        
     let overlapParams = [preferredDate, preferredTime, serviceType];
     
@@ -1073,7 +1073,7 @@ app.get('/api/available-slots', async (req, res) => {
   try {
     // Automatically prune expired holds older than 5 minutes so available slots are 100% real-time accurate
     try {
-      await pool.query("DELETE FROM pickle_appointment WHERE status = 'held' AND created_at < NOW() - INTERVAL '5 minutes'");
+      await pool.query("DELETE FROM pickle_appointment WHERE status = 'held' AND created_at < (NOW() AT TIME ZONE 'Asia/Manila') - INTERVAL '5 minutes'");
     } catch (_) {}
 
     const { date, serviceType } = req.query;
@@ -1114,7 +1114,7 @@ app.get('/api/available-slots', async (req, res) => {
     let queryStr = `SELECT preferred_time, status, service_type FROM pickle_appointment 
       WHERE preferred_date::date = $1::date 
       AND status != 'cancelled'
-      AND (status != 'held' OR created_at >= NOW() - INTERVAL '5 minutes')`;
+      AND (status != 'held' OR created_at >= (NOW() AT TIME ZONE 'Asia/Manila') - INTERVAL '5 minutes')`;
     
     if (serviceType && serviceType.trim().length > 0) {
       const cleanServiceType = serviceType.trim();
