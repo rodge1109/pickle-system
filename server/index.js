@@ -714,7 +714,7 @@ app.post('/api/appointments/hold', (req, res) => {
 });
 app.post('/api/appointments/hold-v2-secure', async (req, res) => {
   try {
-    const { preferredDate, preferredTimes, serviceType, email, appSecret } = req.body;
+    const { preferredDate, preferredTimes, serviceType, email, appSecret, previousHoldToken } = req.body;
     
     // BOT DEFENSE: Require genuine appSecret key
     if (appSecret !== 'pickle_v2_app_secret_key_88') {
@@ -738,9 +738,12 @@ app.post('/api/appointments/hold-v2-secure', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Missing required fields' });
     }
 
-    // Prune expired holds first (older than 5 minutes)
+    // Prune expired holds first (older than 5 minutes) and release any previous hold from the same user session
     try {
       await pool.query("DELETE FROM pickle_appointment WHERE status = 'held' AND created_at < (NOW() AT TIME ZONE 'Asia/Manila') - INTERVAL '5 minutes'");
+      if (previousHoldToken && typeof previousHoldToken === 'string' && previousHoldToken.trim().length > 0) {
+        await pool.query("DELETE FROM pickle_appointment WHERE status = 'held' AND cancel_token = $1", [previousHoldToken.trim()]);
+      }
     } catch (_) {}
 
     // Check for overlap for each time
@@ -781,6 +784,35 @@ app.post('/api/appointments/hold-v2-secure', async (req, res) => {
   } catch (err) {
     console.error('Hold slot error:', err);
     res.status(500).json({ success: false, message: err.message || 'Server error holding slot', error: err.toString() });
+  }
+});
+
+// Release a temporary slot hold when user clicks Back or exits booking screen
+app.post('/api/appointments/release-hold', async (req, res) => {
+  try {
+    const { holdToken, holdTokens } = req.body;
+    const tokens = [];
+    if (holdToken && typeof holdToken === 'string' && holdToken.trim().length > 0) {
+      tokens.push(holdToken.trim());
+    }
+    if (Array.isArray(holdTokens)) {
+      for (const t of holdTokens) {
+        if (t && typeof t === 'string' && t.trim().length > 0) {
+          tokens.push(t.trim());
+        }
+      }
+    }
+    if (tokens.length === 0) {
+      return res.status(400).json({ success: false, message: 'Missing holdToken' });
+    }
+    const result = await pool.query(
+      "DELETE FROM pickle_appointment WHERE status = 'held' AND cancel_token = ANY($1::text[])",
+      [tokens]
+    );
+    res.json({ success: true, releasedCount: result.rowCount || 0 });
+  } catch (err) {
+    console.error('Release hold error:', err);
+    res.status(500).json({ success: false, message: 'Failed to release hold' });
   }
 });
 
@@ -1196,6 +1228,7 @@ app.get('/api/available-slots', async (req, res) => {
     const blockedSlots = bookedResult.rows
       .filter(row => row.status === 'blocked')
       .map(row => normalizeTime(row.preferred_time));
+    const heldSlots = bookedResult.rows.filter(row => row.status === 'held').map(row => normalizeTime(row.preferred_time));
     const unavailableSlots = bookedResult.rows.map(row => normalizeTime(row.preferred_time));
 
     const availableSlots = allSlots.filter(slot => {
@@ -1217,6 +1250,7 @@ app.get('/api/available-slots', async (req, res) => {
       date,
       availableSlots,
       bookedSlots,
+      heldSlots,
       blockedSlots,
       blocked: false
     });
