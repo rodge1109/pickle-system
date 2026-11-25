@@ -7920,10 +7920,10 @@ app.get('/api/owner-earnings/:email', async (req, res) => {
         pMethod === 'cash' ||
         pMethod === 'offline';
 
-      const courtAmount = parseFloat(row.total_amount) || 0;
+      const totalAmount = parseFloat(row.total_amount) || 0;
       const serviceFee = 15.0; // P15 service charge per booking session
-      const gross = isOfflineBlock ? 0.0 : (courtAmount + serviceFee);
-      const netEarnings = isOfflineBlock ? 0.0 : courtAmount;
+      const gross = isOfflineBlock ? 0.0 : totalAmount;
+      const netEarnings = isOfflineBlock ? 0.0 : (totalAmount > serviceFee ? totalAmount - serviceFee : totalAmount);
 
       grossEarnings += gross;
       totalServiceFee += serviceFee;
